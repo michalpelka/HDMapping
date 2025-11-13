@@ -301,7 +301,7 @@ else()
 endif ()
 
 # Download or Search for OpenCV
-add_subdirectory(${EXTERNAL_LIBRARIES_DIRECTORY_BINARY}/OpenCV)
+include(${EXTERNAL_LIBRARIES_DIRECTORY_BINARY}/OpenCV/CMakeLists.txt)
 find_package(OpenCV REQUIRED)
 MESSAGE(STATUS "OpenCV include dir: ${OpenCV_INCLUDE_DIRS}, OpenCV librarys: ${OpenCV_LIBS}")
 
