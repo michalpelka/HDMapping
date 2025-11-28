@@ -1,12 +1,12 @@
 
+#include <ImGuizmo.h>
 #include <imgui.h>
 #include <imgui_impl_glut.h>
 #include <imgui_impl_opengl2.h>
-#include <ImGuizmo.h>
 #include <imgui_internal.h>
 
-#include <GL/glew.h>
 #include <GL/freeglut.h>
+#include <GL/glew.h>
 #include <glm/glm/glm.hpp>
 #include <glm/glm/gtc/matrix_transform.hpp>
 
@@ -16,10 +16,10 @@
 
 #include <portable-file-dialogs.h>
 
-#include <filesystem>
 #include "../lidar_odometry_step_1/lidar_odometry_utils.h"
-#include <export_laz.h>
 #include <HDMapping/Version.hpp>
+#include <export_laz.h>
+#include <filesystem>
 
 #include <mutex>
 
@@ -46,18 +46,12 @@ float translate_z = -50.0;
 float rotate_x = 0.0, rotate_y = 0.0;
 int mouse_old_x, mouse_old_y;
 int mouse_buttons = 0;
-bool gui_mouse_down{false};
+bool gui_mouse_down{ false };
 float mouse_sensitivity = 1.0;
 
-float m_ortho_projection[] = {1, 0, 0, 0,
-                              0, 1, 0, 0,
-                              0, 0, 1, 0,
-                              0, 0, 0, 1};
+float m_ortho_projection[] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
-float m_ortho_gizmo_view[] = {1, 0, 0, 0,
-                              0, 1, 0, 0,
-                              0, 0, 1, 0,
-                              0, 0, 0, 1};
+float m_ortho_gizmo_view[] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
 std::vector<std::string> laz_files;
 std::vector<std::string> csv_files;
@@ -97,12 +91,16 @@ void reshape(int w, int h)
     }
     else
     {
-        ImGuiIO &io = ImGui::GetIO();
+        ImGuiIO& io = ImGui::GetIO();
         float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
 
-        glOrtho(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                -camera_ortho_xy_view_zoom / ratio,
-                camera_ortho_xy_view_zoom / ratio, -100000, 100000);
+        glOrtho(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100000,
+            100000);
         // glOrtho(-translate_z, translate_z, -translate_z * (float)h / float(w), translate_z * float(h) / float(w), -10000, 10000);
     }
     glMatrixMode(GL_MODELVIEW);
@@ -111,7 +109,7 @@ void reshape(int w, int h)
 
 void motion(int x, int y)
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.MousePos = ImVec2((float)x, (float)y);
 
     if (!io.WantCaptureMouse)
@@ -125,8 +123,10 @@ void motion(int x, int y)
             if (mouse_buttons & 1)
             {
                 float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
-                Eigen::Vector3d v(dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
-                                  dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio), 0);
+                Eigen::Vector3d v(
+                    dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
+                    dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio),
+                    0);
                 TaitBryanPose pose_tb;
                 pose_tb.px = 0.0;
                 pose_tb.py = 0.0;
@@ -168,7 +168,7 @@ void project_gui()
 
 void display()
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     glViewport(0, 0, (GLsizei)io.DisplaySize.x, (GLsizei)io.DisplaySize.y);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -176,14 +176,21 @@ void display()
 
     if (is_ortho)
     {
+        glOrtho(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100000,
+            100000);
 
-        glOrtho(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                -camera_ortho_xy_view_zoom / ratio,
-                camera_ortho_xy_view_zoom / ratio, -100000, 100000);
-
-        glm::mat4 proj = glm::orthoLH_ZO<float>(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                                                -camera_ortho_xy_view_zoom / ratio,
-                                                camera_ortho_xy_view_zoom / ratio, -100, 100);
+        glm::mat4 proj = glm::orthoLH_ZO<float>(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100,
+            100);
 
         std::copy(&proj[0][0], &proj[3][3], m_ortho_projection);
 
@@ -202,12 +209,11 @@ void display()
 
         Eigen::Vector3d v_t = m * v;
 
-        gluLookAt(v_eye_t.x(), v_eye_t.y(), v_eye_t.z(),
-                  v_center_t.x(), v_center_t.y(), v_center_t.z(),
-                  v_t.x(), v_t.y(), v_t.z());
-        glm::mat4 lookat = glm::lookAt(glm::vec3(v_eye_t.x(), v_eye_t.y(), v_eye_t.z()),
-                                       glm::vec3(v_center_t.x(), v_center_t.y(), v_center_t.z()),
-                                       glm::vec3(v_t.x(), v_t.y(), v_t.z()));
+        gluLookAt(v_eye_t.x(), v_eye_t.y(), v_eye_t.z(), v_center_t.x(), v_center_t.y(), v_center_t.z(), v_t.x(), v_t.y(), v_t.z());
+        glm::mat4 lookat = glm::lookAt(
+            glm::vec3(v_eye_t.x(), v_eye_t.y(), v_eye_t.z()),
+            glm::vec3(v_center_t.x(), v_center_t.y(), v_center_t.z()),
+            glm::vec3(v_t.x(), v_t.y(), v_t.z()));
         std::copy(&lookat[0][0], &lookat[3][3], m_ortho_gizmo_view);
     }
 
@@ -284,7 +290,7 @@ void display()
         glLineWidth(2);
         glColor3f(0.0, 1.0, 0.0);
         glBegin(GL_LINE_STRIP);
-        for (const auto &t : render_trajectory)
+        for (const auto& t : render_trajectory)
         {
             glVertex3f(t.translation().x(), t.translation().y(), t.translation().z());
         }
@@ -330,7 +336,7 @@ void display()
     glutPostRedisplay();
 }
 
-bool initGL(int *argc, char **argv)
+bool initGL(int* argc, char** argv)
 {
     glutInit(argc, argv);
     glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
@@ -352,7 +358,7 @@ bool initGL(int *argc, char **argv)
     gluPerspective(60.0, (GLfloat)window_width / (GLfloat)window_height, 0.01, 10000.0);
     glutReshapeFunc(reshape);
     ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     (void)io;
     // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
 
@@ -367,7 +373,7 @@ void wheel(int button, int dir, int x, int y);
 
 void mouse(int glut_button, int state, int x, int y)
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.MousePos = ImVec2((float)x, (float)y);
     int button = -1;
     if (glut_button == GLUT_LEFT_BUTTON)
@@ -382,8 +388,7 @@ void mouse(int glut_button, int state, int x, int y)
         io.MouseDown[button] = false;
 
     static int glutMajorVersion = glutGet(GLUT_VERSION) / 10000;
-    if (state == GLUT_DOWN && (glut_button == 3 || glut_button == 4) &&
-        glutMajorVersion < 3)
+    if (state == GLUT_DOWN && (glut_button == 3 || glut_button == 4) && glutMajorVersion < 3)
     {
         wheel(glut_button, glut_button == 3 ? 1 : -1, x, y);
     }
@@ -440,9 +445,9 @@ void wheel(int button, int dir, int x, int y)
     return;
 }
 
-bool compute_step_2_demo(std::vector<WorkerData> &worker_data, LidarOdometryParams &params, double &ts_failure)
+bool compute_step_2_demo(std::vector<WorkerData>& worker_data, LidarOdometryParams& params, double& ts_failure)
 {
-    #if 0 
+#if 0 
     //ToDo
     if (worker_data.size() != 0)
     {
@@ -703,13 +708,13 @@ bool compute_step_2_demo(std::vector<WorkerData> &worker_data, LidarOdometryPara
     }
 
     return true;
-    #endif
+#endif
     return false;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
-    #if 0 
+#if 0 
     //ToDo
     params.in_out_params_indoor.resolution_X = 0.3;
     params.in_out_params_indoor.resolution_Y = 0.3;
@@ -1122,7 +1127,6 @@ int main(int argc, char *argv[])
     ImGui_ImplGLUT_Shutdown();
 
     ImGui::DestroyContext();
-    #endif
+#endif
     return 0;
 }
-

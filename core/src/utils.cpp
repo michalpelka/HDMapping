@@ -1,19 +1,19 @@
-﻿#include <imgui_impl_glut.h>
-#include <imgui_impl_opengl2.h>
+﻿#include <GL/freeglut.h>
 #include <GL/glew.h>
-#include <GL/freeglut.h>
+#include <imgui_impl_glut.h>
+#include <imgui_impl_opengl2.h>
 
 #include "utils.hpp"
 
+#include <HDMapping/Version.hpp>
 #include <cmath>
 #include <cstdio>
-#include <iostream>
-#include <HDMapping/Version.hpp>
 #include <filesystem>
+#include <iostream>
 
 #ifdef _WIN32
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -63,88 +63,85 @@ double scroll_hint_lastT = 0.0;
 
 bool show_about = false;
 
-//General shortcuts applicable to any app
-static const std::vector<ShortcutEntry> shortcuts = {
-    {"Normal keys", "A", ""},
-    {"", "Ctrl+A", ""},
-    {"", "B", "camera Back"},
-    {"", "Ctrl+B", ""},
-    {"", "C", "Compass/ruler"},
-    {"", "Ctrl+C", ""},
-    {"", "D", ""},
-    {"", "Ctrl+D", ""},
-    {"", "E", ""},
-    {"", "Ctrl+E", ""},
-    {"", "F", "camera Front"},
-    {"", "Ctrl+F", ""},
-    {"", "G", ""},
-    {"", "Ctrl+G", ""},
-    {"", "H", ""},
-    {"", "Ctrl+H", ""},
-    {"", "I", "camera Isometric"},
-    {"", "Ctrl+I", ""},
-    {"", "J", ""},
-    {"", "Ctrl+J", ""},
-    {"", "K", ""},
-    {"", "Ctrl+K", ""},
-    {"", "L", "camera Left"},
-    {"", "Ctrl+L", ""},
-    {"", "M", ""},
-    {"", "Ctrl+M", ""},
-    {"", "N", ""},
-    {"", "Ctrl+N", ""},
-    {"", "O", "Ortographic view"},
-    {"", "Ctrl+O", "Open/load session/data"},
-    {"", "P", ""},
-    {"", "Ctrl+P", ""},
-    {"", "Q", ""},
-    {"", "Ctrl+Q", ""},
-    {"", "R", "camera Right"},
-    {"", "Ctrl+R", ""},
-    {"", "S", ""},
-    {"", "Ctrl+S", ""},
-    {"", "Ctrl+Shift+S", ""},
-    {"", "T", "camera Top"},
-    {"", "Ctrl+T", ""},
-    {"", "U", "camera bottom (Under)"},
-    {"", "Ctrl+U", ""},
-    {"", "V", ""},
-    {"", "Ctrl+V", ""},
-    {"", "W", ""},
-    {"", "Ctrl+W", ""},
-    {"", "X", "show aXes"},
-    {"", "Ctrl+X", ""},
-    {"", "Y", ""},
-    {"", "Ctrl+Y", ""},
-    {"", "Z", "camera reset"},
-    {"", "Ctrl+Z", ""},
-    {"", "Shift+Z", "Lock Z"},
-    {"", "1-9", "point size"},
-    {"Special keys", "Up arrow", ""},
-    {"", "Shift + up arrow", "camera translate Up"},
-    {"", "Ctrl + up arrow", ""},
-    {"", "Down arrow", ""},
-    {"", "Shift + down arrow", "camera translate Down"},
-    {"", "Ctrl + down arrow", ""},
-    {"", "Left arrow", ""},
-    {"", "Shift + left arrow", "camera translate Left"},
-    {"", "Ctrl + left arrow", ""},
-    {"", "Right arrow", ""},
-    {"", "Shift + right arrow", "camera translate Right"},
-    {"", "Ctrl + right arrow", ""},
-    {"", "Pg down", ""},
-    {"", "Pg up", ""},
-    {"", "- key", ""},
-    {"", "+ key", ""},
-    {"Mouse related", "Left click + drag", "camera rotate"},
-    {"", "Right click + drag", "camera pan"},
-    {"", "Scroll", "camera zoom"},
-    {"", "Shift + scroll", "camera 5x zoom"},
-    {"", "Ctrl + left click", ""},
-    {"", "Ctrl + right click", "change center of rotation"},
-    {"", "Ctrl + middle click", "change center of rotation (if no CP GUI active)"}
-};
-
+// General shortcuts applicable to any app
+static const std::vector<ShortcutEntry> shortcuts = { { "Normal keys", "A", "" },
+                                                      { "", "Ctrl+A", "" },
+                                                      { "", "B", "camera Back" },
+                                                      { "", "Ctrl+B", "" },
+                                                      { "", "C", "Compass/ruler" },
+                                                      { "", "Ctrl+C", "" },
+                                                      { "", "D", "" },
+                                                      { "", "Ctrl+D", "" },
+                                                      { "", "E", "" },
+                                                      { "", "Ctrl+E", "" },
+                                                      { "", "F", "camera Front" },
+                                                      { "", "Ctrl+F", "" },
+                                                      { "", "G", "" },
+                                                      { "", "Ctrl+G", "" },
+                                                      { "", "H", "" },
+                                                      { "", "Ctrl+H", "" },
+                                                      { "", "I", "camera Isometric" },
+                                                      { "", "Ctrl+I", "" },
+                                                      { "", "J", "" },
+                                                      { "", "Ctrl+J", "" },
+                                                      { "", "K", "" },
+                                                      { "", "Ctrl+K", "" },
+                                                      { "", "L", "camera Left" },
+                                                      { "", "Ctrl+L", "" },
+                                                      { "", "M", "" },
+                                                      { "", "Ctrl+M", "" },
+                                                      { "", "N", "" },
+                                                      { "", "Ctrl+N", "" },
+                                                      { "", "O", "Ortographic view" },
+                                                      { "", "Ctrl+O", "Open/load session/data" },
+                                                      { "", "P", "" },
+                                                      { "", "Ctrl+P", "" },
+                                                      { "", "Q", "" },
+                                                      { "", "Ctrl+Q", "" },
+                                                      { "", "R", "camera Right" },
+                                                      { "", "Ctrl+R", "" },
+                                                      { "", "S", "" },
+                                                      { "", "Ctrl+S", "" },
+                                                      { "", "Ctrl+Shift+S", "" },
+                                                      { "", "T", "camera Top" },
+                                                      { "", "Ctrl+T", "" },
+                                                      { "", "U", "camera bottom (Under)" },
+                                                      { "", "Ctrl+U", "" },
+                                                      { "", "V", "" },
+                                                      { "", "Ctrl+V", "" },
+                                                      { "", "W", "" },
+                                                      { "", "Ctrl+W", "" },
+                                                      { "", "X", "show aXes" },
+                                                      { "", "Ctrl+X", "" },
+                                                      { "", "Y", "" },
+                                                      { "", "Ctrl+Y", "" },
+                                                      { "", "Z", "camera reset" },
+                                                      { "", "Ctrl+Z", "" },
+                                                      { "", "Shift+Z", "Lock Z" },
+                                                      { "", "1-9", "point size" },
+                                                      { "Special keys", "Up arrow", "" },
+                                                      { "", "Shift + up arrow", "camera translate Up" },
+                                                      { "", "Ctrl + up arrow", "" },
+                                                      { "", "Down arrow", "" },
+                                                      { "", "Shift + down arrow", "camera translate Down" },
+                                                      { "", "Ctrl + down arrow", "" },
+                                                      { "", "Left arrow", "" },
+                                                      { "", "Shift + left arrow", "camera translate Left" },
+                                                      { "", "Ctrl + left arrow", "" },
+                                                      { "", "Right arrow", "" },
+                                                      { "", "Shift + right arrow", "camera translate Right" },
+                                                      { "", "Ctrl + right arrow", "" },
+                                                      { "", "Pg down", "" },
+                                                      { "", "Pg up", "" },
+                                                      { "", "- key", "" },
+                                                      { "", "+ key", "" },
+                                                      { "Mouse related", "Left click + drag", "camera rotate" },
+                                                      { "", "Right click + drag", "camera pan" },
+                                                      { "", "Scroll", "camera zoom" },
+                                                      { "", "Shift + scroll", "camera 5x zoom" },
+                                                      { "", "Ctrl + left click", "" },
+                                                      { "", "Ctrl + right click", "change center of rotation" },
+                                                      { "", "Ctrl + middle click", "change center of rotation (if no CP GUI active)" } };
 
 ///////////////////////////////////////////////////////////////////////////////////
 
@@ -158,8 +155,6 @@ std::string truncPath(const std::string& fullPath)
 
     return "..\\" + parent + "\\..\\" + filename;
 }
-
-
 
 void wheel(int button, int dir, int x, int y)
 {
@@ -195,12 +190,12 @@ void wheel(int button, int dir, int x, int y)
             {
                 if (io.KeyShift)
                     translate_z -= 5.0f;
-				else
+                else
                     translate_z -= 1.0f;
             }
         }
 
-        mouse_sensitivity = fabs(translate_z) / 100; //1 for translate_z 50 (default zoom)
+        mouse_sensitivity = fabs(translate_z) / 100; // 1 for translate_z 50 (default zoom)
         camera_transition_active = false;
 
         if (scroll_hint_enabled)
@@ -209,24 +204,24 @@ void wheel(int button, int dir, int x, int y)
             {
                 scroll_hint_accu += fabs(dir);
 
-                if (scroll_hint_accu > 30.0f)  // tweak threshold
+                if (scroll_hint_accu > 30.0f) // tweak threshold
                 {
                     scroll_hint_accu = 0.0f;
                     scroll_hint_active = true;
                     scroll_hint_count++;
                 }
             }
-            
-			if (scroll_hint_active)
+
+            if (scroll_hint_active)
                 scroll_hint_lastT = ImGui::GetTime();
-                
-            //Reset and disable hint if Shift is pressed while scrolling
+
+            // Reset and disable hint if Shift is pressed while scrolling
             if (io.KeyShift || scroll_hint_count > 3)
             {
                 scroll_hint_active = false;
                 scroll_hint_enabled = false;
             }
-		}
+        }
     }
 }
 
@@ -244,9 +239,13 @@ void reshape(int w, int h)
         ImGuiIO& io = ImGui::GetIO();
         float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
 
-        glOrtho(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
+        glOrtho(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
             -camera_ortho_xy_view_zoom / ratio,
-            camera_ortho_xy_view_zoom / ratio, -100000, 100000);
+            camera_ortho_xy_view_zoom / ratio,
+            -100000,
+            100000);
         // glOrtho(-translate_z, translate_z, -translate_z * (float)h / float(w), translate_z * float(h) / float(w), -10000, 10000);
     }
     glMatrixMode(GL_MODELVIEW);
@@ -269,8 +268,10 @@ void motion(int x, int y)
             if (mouse_buttons & 1)
             {
                 float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
-                Eigen::Vector3d v(dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
-                    dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio), 0);
+                Eigen::Vector3d v(
+                    dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
+                    dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio),
+                    0);
                 TaitBryanPose pose_tb;
                 pose_tb.px = 0.0;
                 pose_tb.py = 0.0;
@@ -286,19 +287,19 @@ void motion(int x, int y)
         }
         else
         {
-            if (mouse_buttons & 1) //left button
+            if (mouse_buttons & 1) // left button
             {
                 rotate_x += dy * 0.2f; // * mouse_sensitivity;
                 rotate_y += dx * 0.2f; // * mouse_sensitivity;
                 breakCameraTransition();
-                //camera_transition_active = false;
+                // camera_transition_active = false;
             }
-            if (mouse_buttons & 4) //right button
+            if (mouse_buttons & 4) // right button
             {
                 translate_x += dx * 0.1f * mouse_sensitivity;
                 translate_y -= dy * 0.1f * mouse_sensitivity;
                 breakCameraTransition();
-                //camera_transition_active = false;
+                // camera_transition_active = false;
             }
         }
 
@@ -308,19 +309,29 @@ void motion(int x, int y)
     glutPostRedisplay();
 }
 
-ImGuiKey keyToImGuiKey(unsigned char key) {
-    if (key >= 'a' && key <= 'z') return ImGuiKey(ImGuiKey_A + (key - 'a'));
-    if (key >= 'A' && key <= 'Z') return ImGuiKey(ImGuiKey_A + (key - 'A'));
-    if (key >= '0' && key <= '9') return ImGuiKey(ImGuiKey_0 + (key - '0'));
-    switch (key) {
-        case 27: return ImGuiKey_Escape;
-        case 13: return ImGuiKey_Enter;
-        case 32: return ImGuiKey_Space;
-        default: return ImGuiKey_None;
+ImGuiKey keyToImGuiKey(unsigned char key)
+{
+    if (key >= 'a' && key <= 'z')
+        return ImGuiKey(ImGuiKey_A + (key - 'a'));
+    if (key >= 'A' && key <= 'Z')
+        return ImGuiKey(ImGuiKey_A + (key - 'A'));
+    if (key >= '0' && key <= '9')
+        return ImGuiKey(ImGuiKey_0 + (key - '0'));
+    switch (key)
+    {
+    case 27:
+        return ImGuiKey_Escape;
+    case 13:
+        return ImGuiKey_Enter;
+    case 32:
+        return ImGuiKey_Space;
+    default:
+        return ImGuiKey_None;
     }
 }
 
-void keyboardDown(unsigned char key, int x, int y) {
+void keyboardDown(unsigned char key, int x, int y)
+{
     ImGuiIO& io = ImGui::GetIO();
 
     int mods = glutGetModifiers();
@@ -330,18 +341,19 @@ void keyboardDown(unsigned char key, int x, int y) {
     io.AddKeyEvent(ImGuiMod_Alt, (mods & GLUT_ACTIVE_ALT) != 0);
 
     // Handle Ctrl+letter (ASCII 1-26) (FreeGLUT “lost key” problem)
-    if ( (mods & GLUT_ACTIVE_CTRL) && (key >= 1 && key <= 26) )
+    if ((mods & GLUT_ACTIVE_CTRL) && (key >= 1 && key <= 26))
         key = 'A' + (key - 1);
 
     io.AddKeyEvent(keyToImGuiKey(key), true);
 
-    //forward to ImGui GLUT backend
+    // forward to ImGui GLUT backend
     ImGui_ImplGLUT_KeyboardFunc(key, x, y);
 
-    //std::cout << "Down key: " << key << ", mod: " << mods << std::endl;
+    // std::cout << "Down key: " << key << ", mod: " << mods << std::endl;
 }
 
-void keyboardUp(unsigned char key, int x, int y) {
+void keyboardUp(unsigned char key, int x, int y)
+{
     ImGuiIO& io = ImGui::GetIO();
 
     int mods = glutGetModifiers();
@@ -358,20 +370,14 @@ void keyboardUp(unsigned char key, int x, int y) {
 
     ImGui_ImplGLUT_KeyboardUpFunc(key, x, y);
 
-    //std::cout << "Up key: " << key << ", mod: " << mods << std::endl;
+    // std::cout << "Up key: " << key << ", mod: " << mods << std::endl;
 }
 
 void ShowMainDockSpace()
 {
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking
-                                | ImGuiWindowFlags_NoTitleBar
-                                | ImGuiWindowFlags_NoCollapse
-                                | ImGuiWindowFlags_NoResize
-                                | ImGuiWindowFlags_NoMove
-                                | ImGuiWindowFlags_NoBringToFrontOnFocus
-                                | ImGuiWindowFlags_NoNavFocus
-                                | ImGuiWindowFlags_NoBackground
-                                | ImGuiWindowFlags_NoInputs;
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs;
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -403,13 +409,15 @@ bool initGL(int* argc, char** argv, const std::string& winTitle, void (*display)
 #ifdef _WIN32
     HWND hwnd = FindWindow(NULL, winTitle.c_str()); // The window title must match exactly
     if (!hwnd)
-		return false; //couldn't find window handle
+        return false; // couldn't find window handle
     HINSTANCE hInstance = GetModuleHandle(NULL);
     SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
     SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1)));
 #endif
 
-    while (glGetError() != GL_NO_ERROR) {} // Clear any existing GL errors from platform or driver init
+    while (glGetError() != GL_NO_ERROR)
+    {
+    } // Clear any existing GL errors from platform or driver init
 
     // default initialization
     glClearColor(0.0, 0.0, 0.0, 1.0);
@@ -427,9 +435,8 @@ bool initGL(int* argc, char** argv, const std::string& winTitle, void (*display)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard     // Enable Keyboard Controls
-                   | ImGuiConfigFlags_NavEnableGamepad
-                   | ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard // Enable Keyboard Controls
+        | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
 
     ImGui::StyleColorsDark();
     ImGui_ImplGLUT_Init();
@@ -441,19 +448,17 @@ bool initGL(int* argc, char** argv, const std::string& winTitle, void (*display)
     glutMouseFunc(mouse);
     glutMotionFunc(motion);
     glutMouseWheelFunc(wheel);
-	glutKeyboardFunc(keyboardDown);
-	glutKeyboardUpFunc(keyboardUp);
-    //glutSpecialFunc(specialDown);
-    //glutSpecialUpFunc(specialUp);
+    glutKeyboardFunc(keyboardDown);
+    glutKeyboardUpFunc(keyboardUp);
+    // glutSpecialFunc(specialDown);
+    // glutSpecialUpFunc(specialUp);
 
     return (glGetError() == GL_NO_ERROR);
 }
 
-
-
 void showAxes()
 {
-    if (show_axes || ImGui::GetIO().KeyCtrl) //rotation center axes
+    if (show_axes || ImGui::GetIO().KeyCtrl) // rotation center axes
     {
         glBegin(GL_LINES);
         glColor3f(1.f, 1.f, 1.f);
@@ -472,7 +477,7 @@ void showAxes()
         glEnd();
     }
 
-    if (show_axes || ImGui::GetIO().KeyCtrl) //origin axes
+    if (show_axes || ImGui::GetIO().KeyCtrl) // origin axes
     {
         glBegin(GL_LINES);
         glColor3f(1.0f, 0.0f, 0.0f);
@@ -496,7 +501,7 @@ void updateCameraTransition()
         return;
 
     // Smoothly approach the target using exponential interpolation
-    //const float t = std::min(deltaTime * camera_transition_speed, 1.0f);
+    // const float t = std::min(deltaTime * camera_transition_speed, 1.0f);
 
     // Ease out curve, slow down effect
     float t = 1.0f - powf(1.0f - std::min(ImGui::GetIO().DeltaTime * camera_transition_speed, 1.0f), 3.0f);
@@ -510,18 +515,26 @@ void updateCameraTransition()
     bool doneYt = fabs(new_translate_y - translate_y) < 0.01f;
     bool doneZt = fabs(new_translate_z - translate_z) < 0.01f;
 
-    if (!doneXrc) rotation_center.x() += (new_rotation_center.x() - rotation_center.x()) * t;
-    if (!doneYrc) rotation_center.y() += (new_rotation_center.y() - rotation_center.y()) * t;
-    if (!doneZrc) rotation_center.z() += (new_rotation_center.z() - rotation_center.z()) * t;
-    if (!doneXr) rotate_x += (new_rotate_x - rotate_x) * t;
-    if (!doneYr) rotate_y += (new_rotate_y - rotate_y) * t;
-    if (!doneXt) translate_x += (new_translate_x - translate_x) * t;
-    if (!doneYt) translate_y += (new_translate_y - translate_y) * t;
-    if (!doneZt) translate_z += (new_translate_z - translate_z) * t;
+    if (!doneXrc)
+        rotation_center.x() += (new_rotation_center.x() - rotation_center.x()) * t;
+    if (!doneYrc)
+        rotation_center.y() += (new_rotation_center.y() - rotation_center.y()) * t;
+    if (!doneZrc)
+        rotation_center.z() += (new_rotation_center.z() - rotation_center.z()) * t;
+    if (!doneXr)
+        rotate_x += (new_rotate_x - rotate_x) * t;
+    if (!doneYr)
+        rotate_y += (new_rotate_y - rotate_y) * t;
+    if (!doneXt)
+        translate_x += (new_translate_x - translate_x) * t;
+    if (!doneYt)
+        translate_y += (new_translate_y - translate_y) * t;
+    if (!doneZt)
+        translate_z += (new_translate_z - translate_z) * t;
 
     camera_transition_active = !(doneXrc && doneYrc && doneZrc && doneXr && doneYr && doneXt && doneYt && doneZt);
 
-	//making sure exact coordinates are reached at the end of the transition
+    // making sure exact coordinates are reached at the end of the transition
     if (!camera_transition_active)
     {
         rotation_center = new_rotation_center;
@@ -530,17 +543,17 @@ void updateCameraTransition()
         translate_x = new_translate_x;
         translate_y = new_translate_y;
         translate_z = new_translate_z;
-	}
+    }
 }
 
 void breakCameraTransition()
 {
     if (camera_transition_active == false)
         return;
-    //commit new rotation center
-	rotation_center = new_rotation_center;
-	//reset transition
-	camera_transition_active = false;
+    // commit new rotation center
+    rotation_center = new_rotation_center;
+    // reset transition
+    camera_transition_active = false;
 }
 
 void setCameraPreset(CameraPreset preset)
@@ -552,7 +565,7 @@ void setCameraPreset(CameraPreset preset)
     case CAMERA_FRONT:
         new_rotate_x = -90.0f;
         new_rotate_y = +90.0f;
-		triggered = true;
+        triggered = true;
         break;
     case CAMERA_BACK:
         new_rotate_x = -90.0f;
@@ -591,7 +604,7 @@ void setCameraPreset(CameraPreset preset)
         new_translate_x = 0;
         new_translate_y = 0;
         new_translate_z = -50.0f;
-        mouse_sensitivity = fabs(translate_z) / 100; //1 for translate_z 50 (default zoom)
+        mouse_sensitivity = fabs(translate_z) / 100; // 1 for translate_z 50 (default zoom)
 
         camera_ortho_xy_view_zoom = 10;
         camera_ortho_xy_view_shift_x = 0.0;
@@ -656,7 +669,6 @@ void camMenu()
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
 
-
             std::string text = "X";
             float centered = ImGui::GetColumnWidth() - ImGui::CalcTextSize(text.c_str()).x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + centered * 0.5f);
@@ -717,9 +729,10 @@ void view_kbd_shortcuts()
 {
     ImGuiIO& io = ImGui::GetIO();
 
-    if (io.WantCaptureKeyboard) return;
+    if (io.WantCaptureKeyboard)
+        return;
 
-    //translate camera
+    // translate camera
     if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_RightArrow, true))
     {
         translate_x += 0.2f * mouse_sensitivity;
@@ -742,7 +755,7 @@ void view_kbd_shortcuts()
         breakCameraTransition();
     }
 
-    //rotate camera
+    // rotate camera
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_RightArrow, true))
     {
         rotate_y -= mouse_sensitivity;
@@ -766,11 +779,11 @@ void view_kbd_shortcuts()
     }
 
     if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false) && !is_ortho)
-		lock_z = !lock_z;
+        lock_z = !lock_z;
 
-    //only checking for single key press (no modifiers) from this point
-    if (io.KeyCtrl || io.KeyAlt || io.KeyShift) return;
-
+    // only checking for single key press (no modifiers) from this point
+    if (io.KeyCtrl || io.KeyAlt || io.KeyShift)
+        return;
 
     if (ImGui::IsKeyPressed(ImGuiKey_B))
         setCameraPreset(CAMERA_BACK);
@@ -796,28 +809,25 @@ void view_kbd_shortcuts()
     if (ImGui::IsKeyPressed(ImGuiKey_X, false))
         show_axes = !show_axes;
 
-
     if (ImGui::IsKeyPressed(ImGuiKey_1))
-		point_size = 1;
-	if (ImGui::IsKeyPressed(ImGuiKey_2))
-		point_size = 2;
-	if (ImGui::IsKeyPressed(ImGuiKey_3))
-		point_size = 3;
-	if (ImGui::IsKeyPressed(ImGuiKey_4))
-		point_size = 4;
-	if (ImGui::IsKeyPressed(ImGuiKey_5))
-		point_size = 5;
+        point_size = 1;
+    if (ImGui::IsKeyPressed(ImGuiKey_2))
+        point_size = 2;
+    if (ImGui::IsKeyPressed(ImGuiKey_3))
+        point_size = 3;
+    if (ImGui::IsKeyPressed(ImGuiKey_4))
+        point_size = 4;
+    if (ImGui::IsKeyPressed(ImGuiKey_5))
+        point_size = 5;
     if (ImGui::IsKeyPressed(ImGuiKey_6))
-		point_size = 6;
-	if (ImGui::IsKeyPressed(ImGuiKey_7))
-		point_size = 7;
-	if (ImGui::IsKeyPressed(ImGuiKey_8))
-		point_size = 8;
-	if (ImGui::IsKeyPressed(ImGuiKey_9))
-		point_size = 9;
+        point_size = 6;
+    if (ImGui::IsKeyPressed(ImGuiKey_7))
+        point_size = 7;
+    if (ImGui::IsKeyPressed(ImGuiKey_8))
+        point_size = 8;
+    if (ImGui::IsKeyPressed(ImGuiKey_9))
+        point_size = 9;
 }
-
-
 
 void ImGuiHyperlink(const char* url, ImVec4 color)
 {
@@ -837,11 +847,7 @@ void ImGuiHyperlink(const char* url, ImVec4 color)
     if (ImGui::IsItemHovered())
     {
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        draw_list->AddLine(
-            ImVec2(pos.x, pos.y + size.y),
-            ImVec2(pos.x + size.x, pos.y + size.y),
-            ImColor(color)
-        );
+        draw_list->AddLine(ImVec2(pos.x, pos.y + size.y), ImVec2(pos.x + size.x, pos.y + size.y), ImColor(color));
     }
 
     // Open URL on click
@@ -859,12 +865,10 @@ void ImGuiHyperlink(const char* url, ImVec4 color)
     }
 }
 
-
-
 void ShowShortcutsTable(const std::vector<ShortcutEntry> appShortcuts)
 {
-    if (ImGui::BeginTable("ShortcutsTable", 2,
-        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(-FLT_MIN, 200)))
+    if (ImGui::BeginTable(
+            "ShortcutsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(-FLT_MIN, 200)))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthFixed, 120);
@@ -905,18 +909,16 @@ void ShowShortcutsTable(const std::vector<ShortcutEntry> appShortcuts)
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextUnformatted(description.c_str());
             }
-
         }
 
         ImGui::EndTable();
     }
 }
 
-
-
 void info_window(const std::vector<std::string>& infoLines, const std::vector<ShortcutEntry>& appShortcuts, bool* open)
 {
-    if (!open || !*open) return;
+    if (!open || !*open)
+        return;
 
     if (ImGui::Begin("Info", open, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize))
     {
@@ -932,7 +934,9 @@ void info_window(const std::vector<std::string>& infoLines, const std::vector<Sh
 
             if (firstLine)
             {
-                ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("ImGui").x - ImGui::GetStyle().ItemSpacing.x * 2 - ImGui::GetStyle().FramePadding.x * 2);
+                ImGui::SameLine(
+                    ImGui::GetWindowWidth() - ImGui::CalcTextSize("ImGui").x - ImGui::GetStyle().ItemSpacing.x * 2 -
+                    ImGui::GetStyle().FramePadding.x * 2);
                 if (ImGui::Button("ImGui"))
                     show_about = true;
                 if (ImGui::IsItemHovered())
@@ -945,10 +949,10 @@ void info_window(const std::vector<std::string>& infoLines, const std::vector<Sh
 
                     ImGui::Text("Renderer: %s", renderer);
                     ImGui::Text("OpenGL version supported: %s", version);
-					ImGui::Text("GLSL version: %s", glslVersion);
+                    ImGui::Text("GLSL version: %s", glslVersion);
                     ImGui::EndTooltip();
                 }
-                
+
                 firstLine = false;
             }
         }
@@ -963,7 +967,7 @@ void info_window(const std::vector<std::string>& infoLines, const std::vector<Sh
         ImGuiHyperlink("https://github.com/MapsHD/HDMapping");
 
         ImGui::NewLine();
-		ImGui::Separator();
+        ImGui::Separator();
         ImGui::NewLine();
 
         ShowShortcutsTable(appShortcuts);
@@ -975,21 +979,15 @@ void info_window(const std::vector<std::string>& infoLines, const std::vector<Sh
     }
 }
 
-
-
-void drawMiniCompassWithRuler(
-    const Eigen::Affine3f& viewLocal,
-    float translate_z,
-    const ImVec4& bg_color,
-    ImVec2 compassSize)
+void drawMiniCompassWithRuler(const Eigen::Affine3f& viewLocal, float translate_z, const ImVec4& bg_color, ImVec2 compassSize)
 {
     auto drawLabel = [](float x, float y, float z, const char* text, float r, float g, float b)
-        {
-            glColor3f(r, g, b);
-            glRasterPos3f(x, y, z);
-            for (const char* c = text; *c; ++c)
-                glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, *c);
-        };
+    {
+        glColor3f(r, g, b);
+        glRasterPos3f(x, y, z);
+        for (const char* c = text; *c; ++c)
+            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, *c);
+    };
 
     ImGuiIO& io = ImGui::GetIO();
 
@@ -1032,9 +1030,12 @@ void drawMiniCompassWithRuler(
     float base = pow(10.0f, floor(log10(rawUnit)));
     float normalized = rawUnit / base;
     float niceUnit;
-    if (normalized < 2.0f)      niceUnit = 1.0f;
-    else if (normalized < 5.0f) niceUnit = 2.0f;
-    else                        niceUnit = 5.0f;
+    if (normalized < 2.0f)
+        niceUnit = 1.0f;
+    else if (normalized < 5.0f)
+        niceUnit = 2.0f;
+    else
+        niceUnit = 5.0f;
     float worldLength = niceUnit * base;
 
     float scale = miniAxisLength / rawUnit; // convert scroll units to visual units
@@ -1043,9 +1044,15 @@ void drawMiniCompassWithRuler(
     // Draw axes
     glLineWidth(2.0f);
     glBegin(GL_LINES);
-    glColor3f(1, 0, 0); glVertex3f(0, 0, 0); glVertex3f(axisDrawLength, 0, 0); // X
-    glColor3f(0, 1, 0); glVertex3f(0, 0, 0); glVertex3f(0, axisDrawLength, 0); // Y
-    glColor3f(0, 0, 1); glVertex3f(0, 0, 0); glVertex3f(0, 0, axisDrawLength); // Z
+    glColor3f(1, 0, 0);
+    glVertex3f(0, 0, 0);
+    glVertex3f(axisDrawLength, 0, 0); // X
+    glColor3f(0, 1, 0);
+    glVertex3f(0, 0, 0);
+    glVertex3f(0, axisDrawLength, 0); // Y
+    glColor3f(0, 0, 1);
+    glVertex3f(0, 0, 0);
+    glVertex3f(0, 0, axisDrawLength); // Z
     glEnd();
 
     // Draw axis labels
@@ -1055,13 +1062,17 @@ void drawMiniCompassWithRuler(
 
     // End scale label
     char label[24];
-    if (worldLength >= 1000.0f)      sprintf(label, "%.0f [km]", worldLength / 1000.0f);
-    else if (worldLength >= 1.0f)    sprintf(label, "%.0f [m]", worldLength);
-    else if (worldLength >= 0.01f)   sprintf(label, "%.0f [cm]", worldLength * 100.0f);
-    else                             sprintf(label, "<1 [cm]");
+    if (worldLength >= 1000.0f)
+        sprintf(label, "%.0f [km]", worldLength / 1000.0f);
+    else if (worldLength >= 1.0f)
+        sprintf(label, "%.0f [m]", worldLength);
+    else if (worldLength >= 0.01f)
+        sprintf(label, "%.0f [cm]", worldLength * 100.0f);
+    else
+        sprintf(label, "<1 [cm]");
 
-    //drawLabel(axes[2].x() + 0.2f, axes[2].y() + 0.4f, axes[2].z() - 0.2f, label,
-    //    colors[2][0], colors[2][1], colors[2][2]);
+    // drawLabel(axes[2].x() + 0.2f, axes[2].y() + 0.4f, axes[2].z() - 0.2f, label,
+    //     colors[2][0], colors[2][1], colors[2][2]);
     drawLabel(axisDrawLength / 2, axisDrawLength / 2, axisDrawLength / 2, label, 1.0 - bg_color.x, 1.0 - bg_color.y, 1.0 - bg_color.z);
 
     // Restore line width
@@ -1082,8 +1093,6 @@ void drawMiniCompassWithRuler(
     // Restore viewport
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
 }
-
-
 
 float distanceToPlane(const RegistrationPlaneFeature::Plane& plane, const Eigen::Vector3d& p)
 {
@@ -1144,8 +1153,6 @@ LaserBeam GetLaserBeam(int x, int y)
 
     return laser_beam;
 }
-
-
 
 void setNewRotationCenter(int x, int y)
 {

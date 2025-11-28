@@ -1,30 +1,32 @@
 ﻿#ifndef _EXPORT_LAZ_H_
 #define _EXPORT_LAZ_H_
 
-#include <string>
-#include <vector>
 #include <Eigen/Eigen>
 #include <filesystem>
 #include <iostream>
-#include <session.h>
 #include <laszip/laszip_api.h>
-//#include <laszip_api.h>
+#include <session.h>
+#include <string>
+#include <vector>
+// #include <laszip_api.h>
 
 namespace fs = std::filesystem;
 
-inline bool exportLaz(const std::string &filename,
-               const std::vector<Eigen::Vector3d> &pointcloud,
-               const std::vector<unsigned short> &intensity,
-               const std::vector<double> &timestamps,
-               double offset_x = 0.0, double offset_y = 0.0, double offset_alt = 0.0)
+inline bool exportLaz(
+    const std::string& filename,
+    const std::vector<Eigen::Vector3d>& pointcloud,
+    const std::vector<unsigned short>& intensity,
+    const std::vector<double>& timestamps,
+    double offset_x = 0.0,
+    double offset_y = 0.0,
+    double offset_alt = 0.0)
 {
-
     constexpr float scale = 0.0001f; // one tenth of milimeter
     // find max
     Eigen::Vector3d _max(-1000000000.0, -1000000000.0, -1000000000.0);
     Eigen::Vector3d _min(1000000000.0, 1000000000.0, 1000000000.0);
 
-    for (auto &p : pointcloud)
+    for (auto& p : pointcloud)
     {
         if (p.x() < _min.x())
         {
@@ -63,7 +65,7 @@ inline bool exportLaz(const std::string &filename,
 
     // get a pointer to the header of the writer so we can populate it
 
-    laszip_header *header;
+    laszip_header* header;
 
     if (laszip_get_header_pointer(laszip_writer, &header))
     {
@@ -114,7 +116,7 @@ inline bool exportLaz(const std::string &filename,
 
     // get a pointer to the point of the writer that we will populate and write
 
-    laszip_point *point;
+    laszip_point* point;
     if (laszip_get_point_pointer(laszip_writer, &point))
     {
         fprintf(stderr, "DLL ERROR: getting point pointer from laszip writer\n");
@@ -126,7 +128,7 @@ inline bool exportLaz(const std::string &filename,
 
     for (int i = 0; i < pointcloud.size(); i++)
     {
-        const auto &p = pointcloud[i];
+        const auto& p = pointcloud[i];
         point->intensity = intensity[i];
         point->gps_time = timestamps[i] * 1e9;
         p_count++;
@@ -173,13 +175,13 @@ inline bool exportLaz(const std::string &filename,
     return true;
 }
 
-inline void adjustHeader(laszip_header *header, const Eigen::Affine3d &m_pose, const Eigen::Vector3d &offset_in)
+inline void adjustHeader(laszip_header* header, const Eigen::Affine3d& m_pose, const Eigen::Vector3d& offset_in)
 {
-    Eigen::Vector3d max{header->max_x, header->max_y, header->max_z};
-    Eigen::Vector3d min{header->min_x, header->min_y, header->min_z};
+    Eigen::Vector3d max{ header->max_x, header->max_y, header->max_z };
+    Eigen::Vector3d min{ header->min_x, header->min_y, header->min_z };
 
-    //max -= offset_in;
-    //min -= offset_in;
+    // max -= offset_in;
+    // min -= offset_in;
 
     Eigen::Vector3d adj_max = m_pose * max + offset_in;
     Eigen::Vector3d adj_min = m_pose * min + offset_in;
@@ -197,21 +199,26 @@ inline void adjustHeader(laszip_header *header, const Eigen::Affine3d &m_pose, c
     header->z_offset = offset_in.z();
 }
 
-//inline Eigen::Vector3d adjustPoint(laszip_F64 input_coordinates[3], const Eigen::Affine3d &m_pose)
+// inline Eigen::Vector3d adjustPoint(laszip_F64 input_coordinates[3], const Eigen::Affine3d &m_pose)
 //{
-//    Eigen::Vector3d i(input_coordinates[0], input_coordinates[1], input_coordinates[2]);
-    //i -= offset;
+//     Eigen::Vector3d i(input_coordinates[0], input_coordinates[1], input_coordinates[2]);
+// i -= offset;
 //    Eigen::Vector3d o = m_pose * i;
 
-    //std::cout << i.x() << " " << i.y() << " " << i.z() << " " << o.x() << " " << o.y() << " " << o.z() << std::endl;
-    //o += offset;
-    //output_coordinates[0] = o.x();
-    //output_coordinates[1] = o.y();
-    //output_coordinates[2] = o.z();
+// std::cout << i.x() << " " << i.y() << " " << i.z() << " " << o.x() << " " << o.y() << " " << o.z() << std::endl;
+// o += offset;
+// output_coordinates[0] = o.x();
+// output_coordinates[1] = o.y();
+// output_coordinates[2] = o.z();
 //    return o;
 //}
 
-inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file_path_put, const Eigen::Affine3d &m_pose, const Eigen::Vector3d &offset, bool override_compressed = false)
+inline void save_processed_pc(
+    const fs::path& file_path_in,
+    const fs::path& file_path_put,
+    const Eigen::Affine3d& m_pose,
+    const Eigen::Vector3d& offset,
+    bool override_compressed = false)
 {
     std::cout << "processing: " << file_path_in << std::endl;
 
@@ -240,7 +247,7 @@ inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file
     }
     std::cout << "compressed : " << is_compressed << std::endl;
 
-    laszip_header *header;
+    laszip_header* header;
 
     if (laszip_get_header_pointer(laszip_reader, &header))
     {
@@ -290,14 +297,14 @@ inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file
         return;
     }
 
-    laszip_point *input_point;
+    laszip_point* input_point;
     if (laszip_get_point_pointer(laszip_reader, &input_point))
     {
         fprintf(stderr, "DLL ERROR: getting point pointer from laszip reader\n");
         std::abort();
     }
 
-    laszip_point *output_point;
+    laszip_point* output_point;
     if (laszip_get_point_pointer(laszip_writer, &output_point))
     {
         fprintf(stderr, "DLL ERROR: getting point pointer from laszip reader\n");
@@ -321,14 +328,14 @@ inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file
 
         Eigen::Vector3d pg = Eigen::Vector3d(input_coordinates[0], input_coordinates[1], input_coordinates[2]);
         pg = m_pose * pg;
-            // adjustPoint(input_coordinates, m_pose);
+        // adjustPoint(input_coordinates, m_pose);
         laszip_F64 output_coordinates[3];
         output_coordinates[0] = pg.x();
         output_coordinates[1] = pg.y();
         output_coordinates[2] = pg.z();
 
         if (laszip_set_coordinates(laszip_writer, output_coordinates))
-        //if (laszip_set_coordinates(laszip_writer, input_coordinates))
+        // if (laszip_set_coordinates(laszip_writer, input_coordinates))
         {
             fprintf(stderr, "DLL ERROR: laszip_set_coordinates %u\n", i);
             std::abort();
@@ -361,7 +368,7 @@ inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file
         return;
     }
 
-    laszip_I64 p_count{0};
+    laszip_I64 p_count{ 0 };
     if (laszip_get_point_count(laszip_writer, &p_count))
     {
         fprintf(stderr, "DLL ERROR: getting point count\n");
@@ -391,27 +398,35 @@ inline void save_processed_pc(const fs::path &file_path_in, const fs::path &file
 }
 
 inline void points_to_vector(
-    const std::vector<Point3Di> points, std::vector<Eigen::Affine3d> &trajectory, double threshold_output_filter, std::vector<int> *index_poses,
-    std::vector<Eigen::Vector3d> &pointcloud, std::vector<unsigned short> &intensity, std::vector<double> &timestamps, bool use_first_pose, bool save_index_pose)
+    const std::vector<Point3Di> points,
+    std::vector<Eigen::Affine3d>& trajectory,
+    double threshold_output_filter,
+    std::vector<int>* index_poses,
+    std::vector<Eigen::Vector3d>& pointcloud,
+    std::vector<unsigned short>& intensity,
+    std::vector<double>& timestamps,
+    bool use_first_pose,
+    bool save_index_pose)
 {
     Eigen::Affine3d m_pose = trajectory[0].inverse();
-    for (const auto &org_p : points)
+    for (const auto& org_p : points)
     {
         Point3Di p = org_p;
         if (p.point.norm() > threshold_output_filter)
         {
             if (use_first_pose)
             {
-                p.point = m_pose * (trajectory[org_p.index_pose] * org_p.point);    
+                p.point = m_pose * (trajectory[org_p.index_pose] * org_p.point);
             }
             else
             {
-                p.point = trajectory[org_p.index_pose] * org_p.point; 
+                p.point = trajectory[org_p.index_pose] * org_p.point;
             }
             pointcloud.push_back(p.point);
             intensity.push_back(p.intensity);
             timestamps.push_back(p.timestamp);
-            if (save_index_pose){
+            if (save_index_pose)
+            {
                 if (index_poses)
                 {
                     index_poses->push_back(org_p.index_pose);
@@ -430,14 +445,14 @@ inline void save_all_to_las(const Session& session, std::string output_las_name,
     Eigen::Affine3d first_pose = Eigen::Affine3d::Identity();
     bool found_first_pose = false;
 
-    for (const auto& p : session.point_clouds_container.point_clouds)  
+    for (const auto& p : session.point_clouds_container.point_clouds)
     {
         if (p.visible)
         {
             if (!found_first_pose)
             {
                 found_first_pose = true;
-                first_pose = p.m_pose;//.inverse();  // valid
+                first_pose = p.m_pose; //.inverse();  // valid
             }
 
             for (size_t i = 0; i < p.points_local.size(); ++i)
@@ -466,23 +481,23 @@ inline void save_all_to_las(const Session& session, std::string output_las_name,
 
     if (as_local)
     {
-        for (auto& pt : pointcloud)  
+        for (auto& pt : pointcloud)
         {
             pt = first_pose * pt;
         }
 
-        //std::cout << "----------------------" << std::endl;
-        //std::cout << first_pose.matrix() << std::endl;
+        // std::cout << "----------------------" << std::endl;
+        // std::cout << first_pose.matrix() << std::endl;
     }
 
     if (!exportLaz(
-        output_las_name,
-        pointcloud,
-        intensity,
-        timestamps,
-        session.point_clouds_container.offset.x(),
-        session.point_clouds_container.offset.y(),
-        session.point_clouds_container.offset.z()))
+            output_las_name,
+            pointcloud,
+            intensity,
+            timestamps,
+            session.point_clouds_container.offset.x(),
+            session.point_clouds_container.offset.y(),
+            session.point_clouds_container.offset.z()))
     {
         std::cout << "problem with saving file: " << output_las_name << std::endl;
     }

@@ -59,24 +59,30 @@ Refer to README.md
 ## Formatting
 
 On Ubuntu:
-```
+```bash
+cd HDMapping
 sudo apt-get update
 sudo apt-get install -y clang-format
 clang-format --version
 
-# Format all C/C++ files in-place
-find . -regex '.*\.\(h\|hh\|hpp\|hxx\|c\|cc\|cpp\|cxx\)' -print0 | xargs -0 clang-format -i
+find . \
+  -path ./3rdparty -prune -o \
+  -path ./3rdpartyBinary -prune -o \
+  -regex '.*\.\(h\|hh\|hpp\|hxx\|c\|cc\|cpp\|cxx\)' -print0 \
+  | xargs -0 clang-format -i
 ```
 
 On Windows:
-```ps
+```powershell
 # Install via winget
 winget install LLVM.LLVM
 clang-format --version
 
 # Format all C/C++ files in-place
-Get-ChildItem -Recurse -Include *.h,*.hh,*.hpp,*.hxx,*.c,*.cc,*.cpp,*.cxx |
-  ForEach-Object { clang-format -i $_.FullName }
+Get-ChildItem -Recurse -File -Include *.h,*.hh,*.hpp,*.hxx,*.c,*.cc,*.cpp,*.cxx `
+  | Where-Object { $_.FullName -notmatch '\\3rdparty\\' -and $_.FullName -notmatch '\\3rdpartyBinary\\' } `
+  | ForEach-Object { clang-format -i $_.FullName }
+
 ```
 
 ## Testing

@@ -3,8 +3,6 @@
 
 #ifdef WITH_PCL
 
-
-#endif //WITH_PCL
-
+#endif // WITH_PCL
 
 #endif //_PCL_WRAPPER_H_
