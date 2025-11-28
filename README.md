@@ -267,6 +267,7 @@ cmake --version
 
 ## Quick Start (Ubuntu)
 ```bash
+sudo apt-get install build-essential libglew-dev freeglut3-dev libx11-dev libxi-dev libtbb-dev libopencv-dev
 git clone https://github.com/MapsHD/HDMapping.git
 cd HDMapping
 mkdir build

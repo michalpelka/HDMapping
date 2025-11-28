@@ -3,8 +3,4 @@
 
 #include <point_cloud.h>
 
-
-
-
-
 #endif

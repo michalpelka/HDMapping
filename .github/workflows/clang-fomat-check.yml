@@ -1,0 +1,28 @@
+name: clang-format-check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          clang-format --version
+
+      - name: Check formatting (C/C++)
+        run: |
+          # Fail if any file would change. Exclude 3rdparty and 3rdpartyBinary.
+          find . \
+            -path ./3rdparty -prune -o \
+            -path ./3rdpartyBinary -prune -o \
+            -regex '.*\.\(h\|hh\|hpp\|hxx\|c\|cc\|cpp\|cxx\)' -print0 \
+            | xargs -0 clang-format --dry-run --Werror

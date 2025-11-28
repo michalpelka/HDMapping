@@ -1,7 +1,6 @@
 #include "lidar_odometry_gui_utils.h"
-#include <GL/glew.h>
 #include <GL/freeglut.h>
-
+#include <GL/glew.h>
 
 void draw_ellipse(const Eigen::Matrix3d& covar, const Eigen::Vector3d& mean, Eigen::Vector3f color, float nstd)
 {
@@ -19,7 +18,7 @@ void draw_ellipse(const Eigen::Matrix3d& covar, const Eigen::Vector3d& mean, Eig
     {
         for (double j = 0; j < 1.0; j += dj) // vertical
         {
-            double u = i * 2 * pi;     // 0     to  2pi
+            double u = i * 2 * pi; // 0     to  2pi
             double v = (j - 0.5) * pi; //-pi/2 to pi/2
 
             const Eigen::Vector3d pp0(cos(v) * cos(u), cos(v) * sin(u), sin(v));
@@ -40,4 +39,3 @@ void draw_ellipse(const Eigen::Matrix3d& covar, const Eigen::Vector3d& mean, Eig
         }
     }
 }
-

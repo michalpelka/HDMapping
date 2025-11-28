@@ -1,8 +1,8 @@
 #pragma once
 #include <Eigen/Geometry>
 #include <imgui.h>
-#include <structures.h>
 #include <registration_plane_feature.h>
+#include <structures.h>
 
 ///////////////////////////////////////////////////////////////////////////////////
 
@@ -24,7 +24,8 @@ const unsigned int window_height = 600;
 
 const float camera_transition_speed = 1.0f; // higher = faster
 
-enum CameraPreset {
+enum CameraPreset
+{
     CAMERA_FRONT,
     CAMERA_BACK,
     CAMERA_LEFT,
@@ -75,13 +76,14 @@ extern float new_translate_z;
 // Transition timing
 extern bool camera_transition_active;
 
-struct ShortcutEntry {
+struct ShortcutEntry
+{
     std::string type;
     std::string shortcut;
     std::string description;
 };
 
-#define IDI_ICON1                        101 //application icon (double defined in resource.h)
+#define IDI_ICON1 101 // application icon (double defined in resource.h)
 
 ///////////////////////////////////////////////////////////////////////////////////
 
@@ -103,10 +105,7 @@ void ImGuiHyperlink(const char* url, ImVec4 color = ImVec4(0.2f, 0.4f, 0.8f, 1.0
 void info_window(const std::vector<std::string>& infoLines, const std::vector<ShortcutEntry>& appShortcuts, bool* open);
 
 void drawMiniCompassWithRuler(
-    const Eigen::Affine3f& viewLocal,
-    float translate_z,
-    const ImVec4& bg_color,
-    ImVec2 compassSize = ImVec2(200, 200));
+    const Eigen::Affine3f& viewLocal, float translate_z, const ImVec4& bg_color, ImVec2 compassSize = ImVec2(200, 200));
 
 Eigen::Vector3d rayIntersection(const LaserBeam& laser_beam, const RegistrationPlaneFeature::Plane& plane);
 LaserBeam GetLaserBeam(int x, int y);

@@ -1,11 +1,11 @@
 #include <imgui.h>
 #include <imgui_impl_glut.h>
 #include <imgui_impl_opengl2.h>
-#include <implot/implot.h>
 #include <imgui_internal.h>
+#include <implot/implot.h>
 
-#include <GL/glew.h>
 #include <GL/freeglut.h>
+#include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -15,9 +15,9 @@
 
 #include "pfd_wrapper.hpp"
 
-#include <filesystem>
-#include "../lidar_odometry_step_1/lidar_odometry_utils.h"
 #include "../lidar_odometry_step_1/lidar_odometry_gui_utils.h"
+#include "../lidar_odometry_step_1/lidar_odometry_utils.h"
+#include <filesystem>
 
 #include <HDMapping/Version.hpp>
 
@@ -50,18 +50,12 @@ float translate_z = -50.0;
 float rotate_x = 0.0, rotate_y = 0.0;
 int mouse_old_x, mouse_old_y;
 int mouse_buttons = 0;
-bool gui_mouse_down{false};
+bool gui_mouse_down{ false };
 float mouse_sensitivity = 1.0;
 
-float m_ortho_projection[] = {1, 0, 0, 0,
-                              0, 1, 0, 0,
-                              0, 0, 1, 0,
-                              0, 0, 0, 1};
+float m_ortho_projection[] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
-float m_ortho_gizmo_view[] = {1, 0, 0, 0,
-                              0, 1, 0, 0,
-                              0, 0, 1, 0,
-                              0, 0, 0, 1};
+float m_ortho_gizmo_view[] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
 struct AllData
 {
@@ -132,7 +126,7 @@ bool show_rgd_nn = false;
 
 void optimize();
 std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn();
-void draw_ellipse(const Eigen::Matrix3d &covar, Eigen::Vector3d &mean, Eigen::Vector3f color, float nstd);
+void draw_ellipse(const Eigen::Matrix3d& covar, Eigen::Vector3d& mean, Eigen::Vector3f color, float nstd);
 std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov();
 
 namespace photos
@@ -143,7 +137,7 @@ namespace photos
     double nearestTs = 0;
     int photo_width_cam0 = 0;
     int photo_height_cam0 = 0;
-}
+} // namespace photos
 void reshape(int w, int h)
 {
     glViewport(0, 0, (GLsizei)w, (GLsizei)h);
@@ -155,12 +149,16 @@ void reshape(int w, int h)
     }
     else
     {
-        ImGuiIO &io = ImGui::GetIO();
+        ImGuiIO& io = ImGui::GetIO();
         float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
 
-        glOrtho(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                -camera_ortho_xy_view_zoom / ratio,
-                camera_ortho_xy_view_zoom / ratio, -100000, 100000);
+        glOrtho(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100000,
+            100000);
         // glOrtho(-translate_z, translate_z, -translate_z * (float)h / float(w), translate_z * float(h) / float(w), -10000, 10000);
     }
     glMatrixMode(GL_MODELVIEW);
@@ -169,7 +167,7 @@ void reshape(int w, int h)
 
 void motion(int x, int y)
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.MousePos = ImVec2((float)x, (float)y);
 
     if (!io.WantCaptureMouse)
@@ -183,8 +181,10 @@ void motion(int x, int y)
             if (mouse_buttons & 1)
             {
                 float ratio = float(io.DisplaySize.x) / float(io.DisplaySize.y);
-                Eigen::Vector3d v(dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
-                                  dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio), 0);
+                Eigen::Vector3d v(
+                    dx * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.x * 2),
+                    dy * (camera_ortho_xy_view_zoom / (GLsizei)io.DisplaySize.y * 2 / ratio),
+                    0);
                 TaitBryanPose pose_tb;
                 pose_tb.px = 0.0;
                 pose_tb.py = 0.0;
@@ -241,35 +241,41 @@ static ImVec2 DisplayImageFit(ImTextureID tex, int tex_w, int tex_h, bool allow_
     return disp;
 }
 
-void render_nearest_photo(double ts) {
+void render_nearest_photo(double ts)
+{
     using namespace photos;
     // find closest photo
-    if (photo_files_ts.empty()) {
+    if (photo_files_ts.empty())
+    {
         return;
     }
     uint64_t ts_uint64 = static_cast<uint64_t>(ts * 1e9);
     auto it = photo_files_ts.lower_bound(ts_uint64);
-    if (it == photo_files_ts.end()) {
+    if (it == photo_files_ts.end())
+    {
         return;
     }
-    const std::string &photo_file = it->second;
-    if (photo_file == imgToShowFn) {
+    const std::string& photo_file = it->second;
+    if (photo_file == imgToShowFn)
+    {
         return;
     }
     std::cout << "render_nearest_photo: " << photo_file << std::endl;
     cv::Mat img = cv::imread(photo_file);
-    if (img.empty()) {
+    if (img.empty())
+    {
         return;
     }
     cv::Mat img_rgb;
     cv::cvtColor(img, img_rgb, cv::COLOR_BGR2RGB);
     imgToShow = img_rgb;
     imgToShowFn = photo_file;
-    photos::nearestTs = double(it->first)/1e9;
+    photos::nearestTs = double(it->first) / 1e9;
     // upload to OpenGL texture
     photo_width_cam0 = imgToShow.cols;
     photo_height_cam0 = imgToShow.rows;
-    if (photo_texture_cam0 == 0) {
+    if (photo_texture_cam0 == 0)
+    {
         glGenTextures(1, &photo_texture_cam0);
     }
     glBindTexture(GL_TEXTURE_2D, photo_texture_cam0);
@@ -278,29 +284,27 @@ void render_nearest_photo(double ts) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, photo_width_cam0, photo_height_cam0, 0, GL_RGB, GL_UNSIGNED_BYTE, imgToShow.data);
     glBindTexture(GL_TEXTURE_2D, 0);
-
 }
 void project_gui()
 {
-    if (ImGui::Begin("CAM0")) {
+    if (ImGui::Begin("CAM0"))
+    {
         if (photos::photo_texture_cam0)
         {
             using namespace photos;
             ImGui::Text("fn name: %s ", photos::imgToShowFn.c_str());
             ImGui::Text("timestamp:  %s", std::to_string(photos::nearestTs).c_str());
             // get available size
-            DisplayImageFit((ImTextureID)photos::photo_texture_cam0,  photo_width_cam0, photo_height_cam0);
-
-
+            DisplayImageFit((ImTextureID)photos::photo_texture_cam0, photo_width_cam0, photo_height_cam0);
         }
 
         ImGui::End();
     }
     if (ImGui::Begin("main gui window"))
     {
-        ImGui::ColorEdit3("clear color", (float *)&clear_color);
-        ImGui::ColorEdit3("pc_color_lidar_1", (float *)&pc_color);
-        ImGui::ColorEdit3("pc_color_lidar_2", (float *)&pc_color2);
+        ImGui::ColorEdit3("clear color", (float*)&clear_color);
+        ImGui::ColorEdit3("pc_color_lidar_1", (float*)&pc_color);
+        ImGui::ColorEdit3("pc_color_lidar_2", (float*)&pc_color2);
 
         ImGui::InputInt("point_size", &point_size);
         if (point_size < 1)
@@ -343,43 +347,48 @@ void project_gui()
 
                 std::sort(std::begin(input_file_names), std::end(input_file_names));
 
-                std::for_each(std::begin(input_file_names), std::end(input_file_names), [&](const std::string &fileName)
-                              {
-                    if (fileName.ends_with(".laz") || fileName.ends_with(".las"))
+                std::for_each(
+                    std::begin(input_file_names),
+                    std::end(input_file_names),
+                    [&](const std::string& fileName)
                     {
-                        laz_files.push_back(fileName);
-                        all_file_names.push_back(fileName);
-                    }
-                    else if (fileName.ends_with(".csv"))
-                    {
-                        csv_files.push_back(fileName);
-                    }
-                    else if (fileName.ends_with(".sn"))
-                    {
-                        sn_files.push_back(fileName);
-                    }
-                    else if (fileName.ends_with(".jpg")) {
-                        photos_files.push_back(fileName);
-                        // decode filename e.g.: ` cam0_1761264773592270949.jpg`
-                        const std::string filename = fs::path(fileName).stem().string();
-                        std::string cam_id = filename.substr(0, filename.find("_"));
-                        std::string timestamp = filename.substr(filename.find("_") + 1, filename.size());
-
-                        std::cout << "cam_id: " << cam_id << std::endl;
-                        std::cout << "timestamp: " << timestamp << std::endl;
-                        std::cout << "filename: " << filename << std::endl;
-
-                        if (cam_id == "cam0" && !timestamp.empty())
+                        if (fileName.ends_with(".laz") || fileName.ends_with(".las"))
                         {
-                            try {
-                                uint64_t ts = std::stoull(timestamp);
-                                photo_files_ts[ts] = fileName;
-                            }
-                            catch (const std::exception &e) {
-                                std::cerr << "Error parsing timestamp from filename: " << filename << " - " << e.what() << std::endl;
-							}
+                            laz_files.push_back(fileName);
+                            all_file_names.push_back(fileName);
                         }
-                    }
+                        else if (fileName.ends_with(".csv"))
+                        {
+                            csv_files.push_back(fileName);
+                        }
+                        else if (fileName.ends_with(".sn"))
+                        {
+                            sn_files.push_back(fileName);
+                        }
+                        else if (fileName.ends_with(".jpg"))
+                        {
+                            photos_files.push_back(fileName);
+                            // decode filename e.g.: ` cam0_1761264773592270949.jpg`
+                            const std::string filename = fs::path(fileName).stem().string();
+                            std::string cam_id = filename.substr(0, filename.find("_"));
+                            std::string timestamp = filename.substr(filename.find("_") + 1, filename.size());
+
+                            std::cout << "cam_id: " << cam_id << std::endl;
+                            std::cout << "timestamp: " << timestamp << std::endl;
+                            std::cout << "filename: " << filename << std::endl;
+
+                            if (cam_id == "cam0" && !timestamp.empty())
+                            {
+                                try
+                                {
+                                    uint64_t ts = std::stoull(timestamp);
+                                    photo_files_ts[ts] = fileName;
+                                } catch (const std::exception& e)
+                                {
+                                    std::cerr << "Error parsing timestamp from filename: " << filename << " - " << e.what() << std::endl;
+                                }
+                            }
+                        }
                     });
 
                 if (input_file_names.size() > 0 && laz_files.size() == csv_files.size())
@@ -393,14 +402,15 @@ void project_gui()
                     if (!preloadedCalibration.empty())
                     {
                         std::cout << "Loaded calibration for: \n";
-                        for (const auto &[sn, _] : preloadedCalibration)
+                        for (const auto& [sn, _] : preloadedCalibration)
                         {
                             std::cout << " -> " << sn << std::endl;
                         }
                     }
                     else
                     {
-                        std::cout << "There is no calibration.json file in folder (check comment in source code) file: " << __FILE__ << " line: " << __LINE__ << std::endl;
+                        std::cout << "There is no calibration.json file in folder (check comment in source code) file: " << __FILE__
+                                  << " line: " << __LINE__ << std::endl;
                         // example file for 2x livox";
                         /*
                         {
@@ -425,7 +435,6 @@ void project_gui()
                     }
                     std::cout << "Number of found photos: " << photos_files.size() << std::endl;
 
-
                     fs::path wdp = fs::path(input_file_names[0]).parent_path();
                     wdp /= "preview";
                     if (!fs::exists(wdp))
@@ -444,7 +453,7 @@ void project_gui()
 
                     for (size_t fileNo = 0; fileNo < csv_files.size(); fileNo++)
                     {
-                        const std::string &imufn = csv_files.at(fileNo);
+                        const std::string& imufn = csv_files.at(fileNo);
                         const std::string snFn = (fileNo >= sn_files.size()) ? ("") : (sn_files.at(fileNo));
 
                         std::cout << "parsing sn file '" << snFn << "'" << std::endl;
@@ -460,14 +469,16 @@ void project_gui()
 
                     // sort IMU data
                     // imu_data
-                    std::sort(imu_data.begin(), imu_data.end(),
-                              [](const std::tuple<std::pair<double, double>, FusionVector, FusionVector> &a, const std::tuple<std::pair<double, double>, FusionVector, FusionVector> &b)
-                              {
-                                  return std::get<0>(a).first < std::get<0>(b).first;
-                              });
+                    std::sort(
+                        imu_data.begin(),
+                        imu_data.end(),
+                        [](const std::tuple<std::pair<double, double>, FusionVector, FusionVector>& a,
+                           const std::tuple<std::pair<double, double>, FusionVector, FusionVector>& b)
+                        {
+                            return std::get<0>(a).first < std::get<0>(b).first;
+                        });
 
-                    std::cout
-                        << "loading points" << std::endl;
+                    std::cout << "loading points" << std::endl;
                     std::vector<std::vector<Point3Di>> pointsPerFile;
                     pointsPerFile.resize(laz_files.size());
                     // std::vector<std::vector<int>> indexesPerFile;
@@ -475,38 +486,45 @@ void project_gui()
                     std::mutex mtx;
                     std::cout << "start std::transform" << std::endl;
 
-                    std::transform(std::execution::par_unseq, std::begin(laz_files), std::end(laz_files), std::begin(pointsPerFile), [&](const std::string &fn)
-                                   {
-                                       // Load mapping from id to sn
-                                       fs::path fnSn(fn);
-                                       fnSn.replace_extension(".sn");
+                    std::transform(
+                        std::execution::par_unseq,
+                        std::begin(laz_files),
+                        std::end(laz_files),
+                        std::begin(pointsPerFile),
+                        [&](const std::string& fn)
+                        {
+                            // Load mapping from id to sn
+                            fs::path fnSn(fn);
+                            fnSn.replace_extension(".sn");
 
-                                       // GetId of Imu to use
-                                       const auto idToSn = MLvxCalib::GetIdToSnMapping(fnSn.string());
-                                       auto calibration = MLvxCalib::CombineIntoCalibration(idToSn, preloadedCalibration);
-                                       auto data = load_point_cloud(fn.c_str(), true, filter_threshold_xy_inner, filter_threshold_xy_outer, calibration);
+                            // GetId of Imu to use
+                            const auto idToSn = MLvxCalib::GetIdToSnMapping(fnSn.string());
+                            auto calibration = MLvxCalib::CombineIntoCalibration(idToSn, preloadedCalibration);
+                            auto data =
+                                load_point_cloud(fn.c_str(), true, filter_threshold_xy_inner, filter_threshold_xy_outer, calibration);
 
-                                       if (fn == laz_files.front())
-                                       {
-                                           fs::path calibrationValidtationFile = wdp / "calibrationValidation.asc";
+                            if (fn == laz_files.front())
+                            {
+                                fs::path calibrationValidtationFile = wdp / "calibrationValidation.asc";
 
-                                           std::ofstream testPointcloud{calibrationValidtationFile.c_str()};
-                                           for (const auto &p : data)
-                                           {
-                                               testPointcloud << p.point.x() << "\t" << p.point.y() << "\t" << p.point.z() << "\t" << p.intensity << "\t" << (int)p.lidarid << "\n";
-                                           }
-                                       }
+                                std::ofstream testPointcloud{ calibrationValidtationFile.c_str() };
+                                for (const auto& p : data)
+                                {
+                                    testPointcloud << p.point.x() << "\t" << p.point.y() << "\t" << p.point.z() << "\t" << p.intensity
+                                                   << "\t" << (int)p.lidarid << "\n";
+                                }
+                            }
 
-                                       std::unique_lock lck(mtx);
-                                       for (const auto &[id, calib] : calibration)
-                                       {
-                                           std::cout << " id : " << id << std::endl;
-                                           std::cout << calib.matrix() << std::endl;
-                                       }
-                                       return data;
-                                       // std::cout << fn << std::endl;
-                                       //
-                                   });
+                            std::unique_lock lck(mtx);
+                            for (const auto& [id, calib] : calibration)
+                            {
+                                std::cout << " id : " << id << std::endl;
+                                std::cout << calib.matrix() << std::endl;
+                            }
+                            return data;
+                            // std::cout << fn << std::endl;
+                            //
+                        });
                     std::cout << "std::transform finished" << std::endl;
 
                     FusionAhrs ahrs;
@@ -533,11 +551,14 @@ void project_gui()
 
                     static double last_ts;
 
-                    for (const auto &[timestamp_pair, gyr, acc] : imu_data)
+                    for (const auto& [timestamp_pair, gyr, acc] : imu_data)
                     {
-                        const FusionVector gyroscope = {static_cast<float>(gyr.axis.x * 180.0 / M_PI), static_cast<float>(gyr.axis.y * 180.0 / M_PI), static_cast<float>(gyr.axis.z * 180.0 / M_PI)};
-                        // const FusionVector gyroscope = {static_cast<float>(gyr.axis.x), static_cast<float>(gyr.axis.y), static_cast<float>(gyr.axis.z)};
-                        const FusionVector accelerometer = {acc.axis.x, acc.axis.y, acc.axis.z};
+                        const FusionVector gyroscope = { static_cast<float>(gyr.axis.x * 180.0 / M_PI),
+                                                         static_cast<float>(gyr.axis.y * 180.0 / M_PI),
+                                                         static_cast<float>(gyr.axis.z * 180.0 / M_PI) };
+                        // const FusionVector gyroscope = {static_cast<float>(gyr.axis.x), static_cast<float>(gyr.axis.y),
+                        // static_cast<float>(gyr.axis.z)};
+                        const FusionVector accelerometer = { acc.axis.x, acc.axis.y, acc.axis.z };
 
                         if (first)
                         {
@@ -578,8 +599,8 @@ void project_gui()
 
                         FusionQuaternion quat = FusionAhrsGetQuaternion(&ahrs);
 
-                        Eigen::Quaterniond d{quat.element.w, quat.element.x, quat.element.y, quat.element.z};
-                        Eigen::Affine3d t{Eigen::Matrix4d::Identity()};
+                        Eigen::Quaterniond d{ quat.element.w, quat.element.x, quat.element.y, quat.element.z };
+                        Eigen::Affine3d t{ Eigen::Matrix4d::Identity() };
                         t.rotate(d);
 
                         trajectory[timestamp_pair.first] = std::pair(t.matrix(), timestamp_pair.second);
@@ -587,7 +608,13 @@ void project_gui()
                         counter++;
                         if (counter % 100 == 0)
                         {
-                            printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f [%d of %d]\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw, counter++, imu_data.size());
+                            printf(
+                                "Roll %0.1f, Pitch %0.1f, Yaw %0.1f [%d of %d]\n",
+                                euler.angle.roll,
+                                euler.angle.pitch,
+                                euler.angle.yaw,
+                                counter++,
+                                imu_data.size());
                         }
 
                         // log it for implot
@@ -605,7 +632,7 @@ void project_gui()
 
                     std::vector<std::pair<double, double>> timestamps;
                     std::vector<Eigen::Affine3d> poses;
-                    for (const auto &t : trajectory)
+                    for (const auto& t : trajectory)
                     {
                         timestamps.emplace_back(t.first, t.second.second);
                         Eigen::Affine3d m;
@@ -614,7 +641,7 @@ void project_gui()
                     }
 
                     int number_of_points = 0;
-                    for (const auto &pp : pointsPerFile)
+                    for (const auto& pp : pointsPerFile)
                     {
                         number_of_points += pp.size();
                     }
@@ -642,11 +669,16 @@ void project_gui()
                     for (int i = 0; i < pointsPerFile.size(); i++)
                     {
                         std::cout << "indexed: " << i + 1 << " of " << pointsPerFile.size() << " files" << std::endl;
-                        for (const auto &pp : pointsPerFile[i])
+                        for (const auto& pp : pointsPerFile[i])
                         {
-                            auto lower = std::lower_bound(timestamps.begin(), timestamps.end(), pp.timestamp,
-                                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                                          { return lhs.first < rhs; });
+                            auto lower = std::lower_bound(
+                                timestamps.begin(),
+                                timestamps.end(),
+                                pp.timestamp,
+                                [](std::pair<double, double> lhs, double rhs) -> bool
+                                {
+                                    return lhs.first < rhs;
+                                });
 
                             int index_pose = std::distance(timestamps.begin(), lower) - 1;
 
@@ -696,7 +728,8 @@ void project_gui()
 
                                 for (int i = 0; i < timestamps.size(); i++)
                                 {
-                                    if (timestamps[i].first >= points_local[0].timestamp && timestamps[i].first <= points_local[points_local.size() - 1].timestamp)
+                                    if (timestamps[i].first >= points_local[0].timestamp &&
+                                        timestamps[i].first <= points_local[points_local.size() - 1].timestamp)
                                     {
                                         data.timestamps.push_back(timestamps[i]);
                                         data.poses.push_back(poses[i]);
@@ -707,11 +740,12 @@ void project_gui()
                                 if (data.timestamps.size() > 2)
                                 {
                                     double ts_begin = data.timestamps[0].first;
-                                    double ts_step = (data.timestamps[data.timestamps.size() - 1].first - data.timestamps[0].first) / data.points_local.size();
+                                    double ts_step = (data.timestamps[data.timestamps.size() - 1].first - data.timestamps[0].first) /
+                                        data.points_local.size();
 
-                                    //std::cout << "ts_begin " << ts_begin << std::endl;
-                                    //std::cout << "ts_step " << ts_step << std::endl;
-                                    //std::cout << "ts_end " << data.timestamps[data.timestamps.size() - 1].first << std::endl;
+                                    // std::cout << "ts_begin " << ts_begin << std::endl;
+                                    // std::cout << "ts_step " << ts_step << std::endl;
+                                    // std::cout << "ts_end " << data.timestamps[data.timestamps.size() - 1].first << std::endl;
 
                                     for (int pp = 0; pp < data.points_local.size(); pp++)
                                     {
@@ -744,7 +778,9 @@ void project_gui()
                     std::cout << "csv_files.size(): " << csv_files.size() << std::endl;
                     std::cout << "sn_files.size(): " << sn_files.size() << std::endl;
 
-                    std::cout << "condition: input_file_names.size() > 0 && laz_files.size() == csv_files.size() && laz_files.size() == sn_files.size() NOT SATISFIED!!!" << std::endl;
+                    std::cout << "condition: input_file_names.size() > 0 && laz_files.size() == csv_files.size() && laz_files.size() == "
+                                 "sn_files.size() NOT SATISFIED!!!"
+                              << std::endl;
                 }
             }
         }
@@ -777,7 +813,8 @@ void project_gui()
                 {
                     for (int i = 0; i < all_points_local[index_rendered_points_local].size(); i++)
                     {
-                        pointcloud.emplace_back(all_points_local[index_rendered_points_local][i].point.x(), all_points_local[index_rendered_points_local][i].point.y(), all_points_local[index_rendered_points_local][i].point.z());
+                        pointcloud.emplace_back(all_points_local[index_rendered_points_local][i].point.x(),
+                all_points_local[index_rendered_points_local][i].point.y(), all_points_local[index_rendered_points_local][i].point.z());
                         intensity.push_back(all_points_local[index_rendered_points_local][i].intensity);
                         timestamps.push_back(all_points_local[index_rendered_points_local][i].timestamp);
                     }
@@ -830,20 +867,33 @@ void project_gui()
             {
                 for (int i = 0; i < all_data[index_rendered_points_local].points_local.size(); i++)
                 {
-                    auto lower = std::lower_bound(all_data[index_rendered_points_local].timestamps.begin(), all_data[index_rendered_points_local].timestamps.end(), all_data[index_rendered_points_local].points_local[i].timestamp,
-                                                  [](std::pair<double, double> lhs, double rhs) -> bool
-                                                  { return lhs.first < rhs; });
+                    auto lower = std::lower_bound(
+                        all_data[index_rendered_points_local].timestamps.begin(),
+                        all_data[index_rendered_points_local].timestamps.end(),
+                        all_data[index_rendered_points_local].points_local[i].timestamp,
+                        [](std::pair<double, double> lhs, double rhs) -> bool
+                        {
+                            return lhs.first < rhs;
+                        });
 
                     int index_pose = std::distance(all_data[index_rendered_points_local].timestamps.begin(), lower) - 1;
 
                     if (index_pose >= 0 && index_pose < all_data[index_rendered_points_local].poses.size())
                     {
-                        std::cout << index_pose << " total nr of poses: [" << all_data[index_rendered_points_local].poses.size() << "] " << all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first << " ts point: " << all_data[index_rendered_points_local].points_local[i].timestamp << " pose ts: " << all_data[index_rendered_points_local].timestamps[index_pose].first << std::endl;
+                        std::cout << index_pose << " total nr of poses: [" << all_data[index_rendered_points_local].poses.size() << "] "
+                                  << all_data[index_rendered_points_local].points_local[i].timestamp -
+                                all_data[index_rendered_points_local].timestamps[index_pose].first
+                                  << " ts point: " << all_data[index_rendered_points_local].points_local[i].timestamp
+                                  << " pose ts: " << all_data[index_rendered_points_local].timestamps[index_pose].first << std::endl;
 
-                        if (fabs(all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first) > max_diff)
+                        if (fabs(
+                                all_data[index_rendered_points_local].points_local[i].timestamp -
+                                all_data[index_rendered_points_local].timestamps[index_pose].first) > max_diff)
                         {
                             // std::cout << all_data[index_rendered_points_local].points_local[i].timestamp << std::endl;
-                            max_diff = fabs(all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first);
+                            max_diff = fabs(
+                                all_data[index_rendered_points_local].points_local[i].timestamp -
+                                all_data[index_rendered_points_local].timestamps[index_pose].first);
                         }
                     }
                 }
@@ -880,9 +930,12 @@ void project_gui()
                 {
                     ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImGuiCond_Once);
                     ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-                    ImPlot::PlotLine("accX", imu_data_plot.timestampLidar.data(), imu_data_plot.accX.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("accY", imu_data_plot.timestampLidar.data(), imu_data_plot.accY.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("accZ", imu_data_plot.timestampLidar.data(), imu_data_plot.accZ.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "accX", imu_data_plot.timestampLidar.data(), imu_data_plot.accX.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "accY", imu_data_plot.timestampLidar.data(), imu_data_plot.accY.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "accZ", imu_data_plot.timestampLidar.data(), imu_data_plot.accZ.data(), (int)imu_data_plot.timestampLidar.size());
                     ImPlot::TagX(annotation, ImVec4(1, 0, 0, 1));
                     ImPlot::EndPlot();
                 }
@@ -891,9 +944,12 @@ void project_gui()
                 {
                     ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImGuiCond_Once);
                     ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-                    ImPlot::PlotLine("angX", imu_data_plot.timestampLidar.data(), imu_data_plot.angX.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("angY", imu_data_plot.timestampLidar.data(), imu_data_plot.angY.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("angZ", imu_data_plot.timestampLidar.data(), imu_data_plot.angZ.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "angX", imu_data_plot.timestampLidar.data(), imu_data_plot.angX.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "angY", imu_data_plot.timestampLidar.data(), imu_data_plot.angY.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "angZ", imu_data_plot.timestampLidar.data(), imu_data_plot.angZ.data(), (int)imu_data_plot.timestampLidar.size());
                     ImPlot::TagX(annotation, ImVec4(1, 0, 0, 1));
                     ImPlot::EndPlot();
                 }
@@ -902,9 +958,12 @@ void project_gui()
                 {
                     ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImGuiCond_Once);
                     ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-                    ImPlot::PlotLine("yaw", imu_data_plot.timestampLidar.data(), imu_data_plot.yaw.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("pitch", imu_data_plot.timestampLidar.data(), imu_data_plot.pitch.data(), (int)imu_data_plot.timestampLidar.size());
-                    ImPlot::PlotLine("roll", imu_data_plot.timestampLidar.data(), imu_data_plot.roll.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "yaw", imu_data_plot.timestampLidar.data(), imu_data_plot.yaw.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "pitch", imu_data_plot.timestampLidar.data(), imu_data_plot.pitch.data(), (int)imu_data_plot.timestampLidar.size());
+                    ImPlot::PlotLine(
+                        "roll", imu_data_plot.timestampLidar.data(), imu_data_plot.roll.data(), (int)imu_data_plot.timestampLidar.size());
                     ImPlot::TagX(annotation, ImVec4(1, 0, 0, 1));
                     ImPlot::EndPlot();
                 }
@@ -916,14 +975,14 @@ void project_gui()
                     // plot photos timestamps
                     std::vector<double> photo_timestamps;
                     std::vector<double> dummy;
-                    for (const auto &[ts, fn] : photo_files_ts)
+                    for (const auto& [ts, fn] : photo_files_ts)
                     {
                         photo_timestamps.push_back(static_cast<double>(ts) / 1e9);
-						dummy.push_back(0.0);
+                        dummy.push_back(0.0);
                     }
                     ImPlot::PlotScatter("photos", photo_timestamps.data(), dummy.data(), (int)photo_timestamps.size());
                     ImPlot::TagX(annotation, ImVec4(1, 0, 0, 1));
-					ImPlot::EndPlot();
+                    ImPlot::EndPlot();
                 }
             }
 
@@ -938,16 +997,10 @@ void project_gui()
                 file << std::setprecision(20);
                 for (int i = 0; i < imu_data_plot.timestampLidar.size(); i++)
                 {
-                    file << imu_data_plot.timestampLidar[i] << " " << 
-                        imu_data_plot.angX[i] << " " << 
-                        imu_data_plot.angY[i] << " " << 
-                        imu_data_plot.angZ[i] << " " << 
-                        imu_data_plot.accX[i] << " " << 
-                        imu_data_plot.accY[i] << " " << 
-                        imu_data_plot.accZ[i] << " " <<
-                        imu_data_plot.yaw[i] << " " << 
-                        imu_data_plot.pitch[i] << " " << 
-                        imu_data_plot.roll[i] << std::endl;
+                    file << imu_data_plot.timestampLidar[i] << " " << imu_data_plot.angX[i] << " " << imu_data_plot.angY[i] << " "
+                         << imu_data_plot.angZ[i] << " " << imu_data_plot.accX[i] << " " << imu_data_plot.accY[i] << " "
+                         << imu_data_plot.accZ[i] << " " << imu_data_plot.yaw[i] << " " << imu_data_plot.pitch[i] << " "
+                         << imu_data_plot.roll[i] << std::endl;
                 }
 
                 file.close();
@@ -960,7 +1013,7 @@ void project_gui()
 
 void display()
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     glViewport(0, 0, (GLsizei)io.DisplaySize.x, (GLsizei)io.DisplaySize.y);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -968,14 +1021,21 @@ void display()
 
     if (is_ortho)
     {
+        glOrtho(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100000,
+            100000);
 
-        glOrtho(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                -camera_ortho_xy_view_zoom / ratio,
-                camera_ortho_xy_view_zoom / ratio, -100000, 100000);
-
-        glm::mat4 proj = glm::orthoLH_ZO<float>(-camera_ortho_xy_view_zoom, camera_ortho_xy_view_zoom,
-                                                -camera_ortho_xy_view_zoom / ratio,
-                                                camera_ortho_xy_view_zoom / ratio, -100, 100);
+        glm::mat4 proj = glm::orthoLH_ZO<float>(
+            -camera_ortho_xy_view_zoom,
+            camera_ortho_xy_view_zoom,
+            -camera_ortho_xy_view_zoom / ratio,
+            camera_ortho_xy_view_zoom / ratio,
+            -100,
+            100);
 
         std::copy(&proj[0][0], &proj[3][3], m_ortho_projection);
 
@@ -994,12 +1054,11 @@ void display()
 
         Eigen::Vector3d v_t = m * v;
 
-        gluLookAt(v_eye_t.x(), v_eye_t.y(), v_eye_t.z(),
-                  v_center_t.x(), v_center_t.y(), v_center_t.z(),
-                  v_t.x(), v_t.y(), v_t.z());
-        glm::mat4 lookat = glm::lookAt(glm::vec3(v_eye_t.x(), v_eye_t.y(), v_eye_t.z()),
-                                       glm::vec3(v_center_t.x(), v_center_t.y(), v_center_t.z()),
-                                       glm::vec3(v_t.x(), v_t.y(), v_t.z()));
+        gluLookAt(v_eye_t.x(), v_eye_t.y(), v_eye_t.z(), v_center_t.x(), v_center_t.y(), v_center_t.z(), v_t.x(), v_t.y(), v_t.z());
+        glm::mat4 lookat = glm::lookAt(
+            glm::vec3(v_eye_t.x(), v_eye_t.y(), v_eye_t.z()),
+            glm::vec3(v_center_t.x(), v_center_t.y(), v_center_t.z()),
+            glm::vec3(v_t.x(), v_t.y(), v_t.z()));
         std::copy(&lookat[0][0], &lookat[3][3], m_ortho_gizmo_view);
     }
 
@@ -1085,7 +1144,8 @@ void display()
              {
                  glColor3f(pc_color2.x, pc_color2.y, pc_color2.z);
              }
-             glVertex3f(all_points_local[index_rendered_points_local][i].point.x(), all_points_local[index_rendered_points_local][i].point.y(), all_points_local[index_rendered_points_local][i].point.z());
+             glVertex3f(all_points_local[index_rendered_points_local][i].point.x(),
+     all_points_local[index_rendered_points_local][i].point.y(), all_points_local[index_rendered_points_local][i].point.z());
          }
      }
      glEnd();
@@ -1095,29 +1155,43 @@ void display()
     glBegin(GL_POINTS);
     if (index_rendered_points_local >= 0 && index_rendered_points_local < all_data.size())
     {
-
         double max_diff = 0.0;
         for (int i = 0; i < all_data[index_rendered_points_local].points_local.size(); i++)
         {
-            auto lower = std::lower_bound(all_data[index_rendered_points_local].timestamps.begin(), all_data[index_rendered_points_local].timestamps.end(), all_data[index_rendered_points_local].points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                all_data[index_rendered_points_local].timestamps.begin(),
+                all_data[index_rendered_points_local].timestamps.end(),
+                all_data[index_rendered_points_local].points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
             int index_pose = std::distance(all_data[index_rendered_points_local].timestamps.begin(), lower) - 1;
             if (index_pose >= 0 && index_pose < all_data[index_rendered_points_local].poses.size())
             {
-                if (fabs(all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first) > max_diff)
+                if (fabs(
+                        all_data[index_rendered_points_local].points_local[i].timestamp -
+                        all_data[index_rendered_points_local].timestamps[index_pose].first) > max_diff)
                 {
-                    // std::cout << index_pose << " " << all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first << std::endl;
-                    max_diff = fabs(all_data[index_rendered_points_local].points_local[i].timestamp - all_data[index_rendered_points_local].timestamps[index_pose].first);
+                    // std::cout << index_pose << " " << all_data[index_rendered_points_local].points_local[i].timestamp -
+                    // all_data[index_rendered_points_local].timestamps[index_pose].first << std::endl;
+                    max_diff = fabs(
+                        all_data[index_rendered_points_local].points_local[i].timestamp -
+                        all_data[index_rendered_points_local].timestamps[index_pose].first);
                 }
             }
         }
 
         for (int i = 0; i < all_data[index_rendered_points_local].points_local.size(); i++)
         {
-            auto lower = std::lower_bound(all_data[index_rendered_points_local].timestamps.begin(), all_data[index_rendered_points_local].timestamps.end(), all_data[index_rendered_points_local].points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                all_data[index_rendered_points_local].timestamps.begin(),
+                all_data[index_rendered_points_local].timestamps.end(),
+                all_data[index_rendered_points_local].points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
 
             int index_pose = std::distance(all_data[index_rendered_points_local].timestamps.begin(), lower) - 1;
 
@@ -1127,7 +1201,8 @@ void display()
             {
                 if (index_pose >= 0 && index_pose < all_data[index_rendered_points_local].poses.size())
                 {
-                    // if (fabs(all_data[index_rendered_points_local].timestamps[index_pose].first - all_data[index_rendered_points_local].points_local[i].timestamp) < 0.001)
+                    // if (fabs(all_data[index_rendered_points_local].timestamps[index_pose].first -
+                    // all_data[index_rendered_points_local].points_local[i].timestamp) < 0.001)
                     //{
                     Eigen::Affine3d m = all_data[index_rendered_points_local].poses[index_pose];
                     Eigen::Vector3d p = m * all_data[index_rendered_points_local].points_local[i].point;
@@ -1153,9 +1228,14 @@ void display()
     {
         for (int i = 0; i < all_data[index_rendered_points_local].points_local.size(); i++)
         {
-            auto lower = std::lower_bound(all_data[index_rendered_points_local].timestamps.begin(), all_data[index_rendered_points_local].timestamps.end(), all_data[index_rendered_points_local].points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                all_data[index_rendered_points_local].timestamps.begin(),
+                all_data[index_rendered_points_local].timestamps.end(),
+                all_data[index_rendered_points_local].points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
 
             int index_pose = std::distance(all_data[index_rendered_points_local].timestamps.begin(), lower) - 1;
 
@@ -1199,7 +1279,7 @@ void display()
     {
         glColor3f(0, 0, 0);
         glBegin(GL_LINES);
-        for (const auto &nn : rgd_nn)
+        for (const auto& nn : rgd_nn)
         {
             glVertex3f(nn.first.x(), nn.first.y(), nn.first.z());
             glVertex3f(nn.second.x(), nn.second.y(), nn.second.z());
@@ -1209,7 +1289,7 @@ void display()
 
     if (show_mean_cov)
     {
-        for (const auto &mc : mean_cov)
+        for (const auto& mc : mean_cov)
         {
             draw_ellipse(mc.second, mc.first, Eigen::Vector3f(1, 0, 0), 1);
         }
@@ -1217,7 +1297,7 @@ void display()
 
     ImGui_ImplOpenGL2_NewFrame();
     ImGui_ImplGLUT_NewFrame();
-	ImGui::NewFrame();
+    ImGui::NewFrame();
 
     project_gui();
 
@@ -1228,7 +1308,7 @@ void display()
     glutPostRedisplay();
 }
 
-bool initGL(int *argc, char **argv)
+bool initGL(int* argc, char** argv)
 {
     glutInit(argc, argv);
     glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
@@ -1251,7 +1331,7 @@ bool initGL(int *argc, char **argv)
     glutReshapeFunc(reshape);
     ImGui::CreateContext();
     ImPlot::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     (void)io;
     // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
 
@@ -1266,7 +1346,7 @@ void wheel(int button, int dir, int x, int y);
 
 void mouse(int glut_button, int state, int x, int y)
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.MousePos = ImVec2((float)x, (float)y);
     int button = -1;
     if (glut_button == GLUT_LEFT_BUTTON)
@@ -1281,8 +1361,7 @@ void mouse(int glut_button, int state, int x, int y)
         io.MouseDown[button] = false;
 
     static int glutMajorVersion = glutGet(GLUT_VERSION) / 10000;
-    if (state == GLUT_DOWN && (glut_button == 3 || glut_button == 4) &&
-        glutMajorVersion < 3)
+    if (state == GLUT_DOWN && (glut_button == 3 || glut_button == 4) && glutMajorVersion < 3)
     {
         wheel(glut_button, glut_button == 3 ? 1 : -1, x, y);
     }
@@ -1308,7 +1387,7 @@ void mouse(int glut_button, int state, int x, int y)
 
 void wheel(int button, int dir, int x, int y)
 {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.MouseWheel += (float)dir;
     if (io.WantCaptureMouse)
     {
@@ -1346,7 +1425,7 @@ void wheel(int button, int dir, int x, int y)
     return;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     initGL(&argc, argv);
     glutDisplayFunc(display);
@@ -1365,7 +1444,6 @@ int main(int argc, char *argv[])
 
 void optimize()
 {
-
 #if 0
     rgd_nn.clear();
 
@@ -1750,17 +1828,23 @@ void optimize()
 
     if (index_rendered_points_local >= 0 && index_rendered_points_local < all_data.size())
     {
-        std::vector<Eigen::Affine3d> tr = all_data[index_rendered_points_local].poses;   // = worker_data[i].intermediate_trajectory;
-        std::vector<Eigen::Affine3d> trmm = all_data[index_rendered_points_local].poses; // = worker_data[i].intermediate_trajectory_motion_model;
+        std::vector<Eigen::Affine3d> tr = all_data[index_rendered_points_local].poses; // = worker_data[i].intermediate_trajectory;
+        std::vector<Eigen::Affine3d> trmm =
+            all_data[index_rendered_points_local].poses; // = worker_data[i].intermediate_trajectory_motion_model;
 
         std::vector<Point3Di> points_local_sf;
         std::vector<Point3Di> points_local;
 
         for (int i = 0; i < all_data[index_rendered_points_local].points_local.size(); i++)
         {
-            auto lower = std::lower_bound(all_data[index_rendered_points_local].timestamps.begin(), all_data[index_rendered_points_local].timestamps.end(), all_data[index_rendered_points_local].points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                all_data[index_rendered_points_local].timestamps.begin(),
+                all_data[index_rendered_points_local].timestamps.end(),
+                all_data[index_rendered_points_local].points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
 
             int index_pose = std::distance(all_data[index_rendered_points_local].timestamps.begin(), lower) - 1;
 
@@ -1772,8 +1856,12 @@ void optimize()
                 double r_l = all_data[index_rendered_points_local].points_local[i].point.norm();
                 if (r_l > 0.5 && all_data[index_rendered_points_local].points_local[i].index_pose != -1 && r_l < max_distance_lidar)
                 {
-                    double polar_angle_deg_l = atan2(all_data[index_rendered_points_local].points_local[i].point.y(), all_data[index_rendered_points_local].points_local[i].point.x()) / M_PI * 180.0;
-                    double azimutal_angle_deg_l = acos(all_data[index_rendered_points_local].points_local[i].point.z() / r_l) / M_PI * 180.0;
+                    double polar_angle_deg_l = atan2(
+                                                   all_data[index_rendered_points_local].points_local[i].point.y(),
+                                                   all_data[index_rendered_points_local].points_local[i].point.x()) /
+                        M_PI * 180.0;
+                    double azimutal_angle_deg_l =
+                        acos(all_data[index_rendered_points_local].points_local[i].point.z() / r_l) / M_PI * 180.0;
 
                     points_local.push_back(all_data[index_rendered_points_local].points_local[i]);
 
@@ -1815,9 +1903,14 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn()
         // index data
         for (int i = 0; i < worker_data.points_local.size(); i++)
         {
-            auto lower = std::lower_bound(worker_data.timestamps.begin(), worker_data.timestamps.end(), worker_data.points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                worker_data.timestamps.begin(),
+                worker_data.timestamps.end(),
+                worker_data.points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
 
             int index_pose = std::distance(worker_data.timestamps.begin(), lower) - 1;
 
@@ -1836,8 +1929,8 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn()
         // rgd_params.resolution_Y = 0.3; // polar angle deg
         // rgd_params.resolution_Z = 0.3; // azimutal angle deg
 
-        rgd_params.resolution_X = distance_bucket;    // distance bucket
-        rgd_params.resolution_Y = polar_angle_deg;    // polar angle deg
+        rgd_params.resolution_X = distance_bucket; // distance bucket
+        rgd_params.resolution_Y = polar_angle_deg; // polar angle deg
         rgd_params.resolution_Z = azimutal_angle_deg; // azimutal angle deg
 
         std::vector<Point3Di> point_cloud_global;
@@ -1851,7 +1944,8 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn()
             double r_l = worker_data.points_local[i].point.norm();
             if (r_l > 0.5 && worker_data.points_local[i].index_pose != -1 && r_l < max_distance_lidar)
             {
-                double polar_angle_deg_l = atan2(worker_data.points_local[i].point.y(), worker_data.points_local[i].point.x()) / M_PI * 180.0;
+                double polar_angle_deg_l =
+                    atan2(worker_data.points_local[i].point.y(), worker_data.points_local[i].point.x()) / M_PI * 180.0;
                 double azimutal_angle_deg_l = acos(worker_data.points_local[i].point.z() / r_l) / M_PI * 180.0;
 
                 Eigen::Vector3d pp = worker_data.points_local[i].point;
@@ -1906,10 +2000,10 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn()
 
             if (bucket_it != buckets.end())
             {
-                auto &this_bucket = bucket_it->second;
+                auto& this_bucket = bucket_it->second;
                 this_bucket.number_of_points++;
                 // const auto &curr_mean = points_global[i].point;
-                const auto &mean = this_bucket.mean;
+                const auto& mean = this_bucket.mean;
 
                 nn.emplace_back(point_cloud_global[i].point, mean);
 
@@ -1920,9 +2014,8 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> get_nn()
     return nn;
 }
 
-void draw_ellipse(const Eigen::Matrix3d &covar, Eigen::Vector3d &mean, Eigen::Vector3f color, float nstd = 3)
+void draw_ellipse(const Eigen::Matrix3d& covar, Eigen::Vector3d& mean, Eigen::Vector3f color, float nstd = 3)
 {
-
     Eigen::LLT<Eigen::Matrix<double, 3, 3>> cholSolver(covar);
     Eigen::Matrix3d transform = cholSolver.matrixL();
 
@@ -1937,7 +2030,7 @@ void draw_ellipse(const Eigen::Matrix3d &covar, Eigen::Vector3d &mean, Eigen::Ve
     {
         for (double j = 0; j < 1.0; j += dj) // vertical
         {
-            double u = i * 2 * pi;     // 0     to  2pi
+            double u = i * 2 * pi; // 0     to  2pi
             double v = (j - 0.5) * pi; //-pi/2 to pi/2
 
             const Eigen::Vector3d pp0(cos(v) * cos(u), cos(v) * sin(u), sin(v));
@@ -1973,9 +2066,14 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov()
         // index data
         for (int i = 0; i < worker_data.points_local.size(); i++)
         {
-            auto lower = std::lower_bound(worker_data.timestamps.begin(), worker_data.timestamps.end(), worker_data.points_local[i].timestamp,
-                                          [](std::pair<double, double> lhs, double rhs) -> bool
-                                          { return lhs.first < rhs; });
+            auto lower = std::lower_bound(
+                worker_data.timestamps.begin(),
+                worker_data.timestamps.end(),
+                worker_data.points_local[i].timestamp,
+                [](std::pair<double, double> lhs, double rhs) -> bool
+                {
+                    return lhs.first < rhs;
+                });
 
             int index_pose = std::distance(worker_data.timestamps.begin(), lower) - 1;
 
@@ -1994,8 +2092,8 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov()
         // rgd_params.resolution_Y = 0.3; // polar angle deg
         // rgd_params.resolution_Z = 0.3; // azimutal angle deg
 
-        rgd_params.resolution_X = distance_bucket;    // distance bucket
-        rgd_params.resolution_Y = polar_angle_deg;    // polar angle deg
+        rgd_params.resolution_X = distance_bucket; // distance bucket
+        rgd_params.resolution_Y = polar_angle_deg; // polar angle deg
         rgd_params.resolution_Z = azimutal_angle_deg; // azimutal angle deg
 
         std::vector<Point3Di> point_cloud_global;
@@ -2009,7 +2107,8 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov()
             double r_l = worker_data.points_local[i].point.norm();
             if (r_l > 0.5 && worker_data.points_local[i].index_pose != -1 && r_l < max_distance_lidar)
             {
-                double polar_angle_deg_l = atan2(worker_data.points_local[i].point.y(), worker_data.points_local[i].point.x()) / M_PI * 180.0;
+                double polar_angle_deg_l =
+                    atan2(worker_data.points_local[i].point.y(), worker_data.points_local[i].point.x()) / M_PI * 180.0;
                 double azimutal_angle_deg_l = acos(worker_data.points_local[i].point.z() / r_l) / M_PI * 180.0;
 
                 Eigen::Vector3d pp = worker_data.points_local[i].point;
@@ -2055,9 +2154,9 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov()
         /////////////
         Eigen::Vector3d b(rgd_params.resolution_X, rgd_params.resolution_Y, rgd_params.resolution_Z);
 
-        for (const auto &b : buckets)
+        for (const auto& b : buckets)
         {
-            auto &this_bucket = b.second;
+            auto& this_bucket = b.second;
 
             mc.emplace_back(this_bucket.mean, this_bucket.cov);
         }
