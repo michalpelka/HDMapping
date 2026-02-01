@@ -377,6 +377,18 @@ MESSAGE(STATUS "Using bundled spdlog from: ${THIRDPARTY_DIRECTORY}/spdlog")
 add_subdirectory(${THIRDPARTY_DIRECTORY}/UTL)
 MESSAGE(STATUS "Using bundled UTL from: ${THIRDPARTY_DIRECTORY}/UTL")
 
+# Add SQLite3 binary tool (Windows only)
+if(WIN32)
+    # on Windows, download prebuilt SqlLite binaries - Proj needs sqlite3.exe for some operations during compilation,
+    # we cannot build it from source, since it requires to be viable at configuration time / compilation time.
+    include(3rd_binary/sqlite_tools/CMakeLists.txt)
+
+    # On Windows - Proj needs SQLite library as well - those are built from source, with Linux we expect system-wide installation
+    include(3rd/sqlite/CMakeLists.txt)
+endif()
+add_subdirectory(3rdparty/Proj)
+
+
 option(PYBIND "Enable pybind11 bindings" OFF)
 if(PYBIND)
     message(STATUS "PYBIND is enabled: fetching pybind.")
@@ -425,6 +437,7 @@ add_subdirectory(apps/livox_mid_360_intrinsic_calibration)
 add_subdirectory(apps/single_session_manual_coloring)
 add_subdirectory(apps/concatenate_multi_livox)
 add_subdirectory(apps/laz_to_ply)
+add_subdirectory(apps/proj_test)
  
 # CPack configuration
 set(CPACK_PACKAGE_NAME "hd_mapping")

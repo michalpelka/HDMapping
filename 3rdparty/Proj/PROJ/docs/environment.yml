@@ -1,0 +1,14 @@
+name: proj
+channels:
+  - conda-forge
+dependencies:
+  - geojson
+  - matplotlib
+  - shapely >= 2
+  - pip
+  - pip:
+    - breathe
+    - pybtex
+    - sphinx-rtd-theme
+    - sphinxcontrib-bibtex
+    - sphinxcontrib-spelling
