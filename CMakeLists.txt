@@ -6,7 +6,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # Export compile commands for static analysis and tools
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-project(hd-mapping)
+project(hd-mapping LANGUAGES CXX C)
 
 set (HDMAPPING_VERSION_MAJOR 0)
 set (HDMAPPING_VERSION_MINOR 96)
@@ -386,7 +386,15 @@ if(WIN32)
     # On Windows - Proj needs SQLite library as well - those are built from source, with Linux we expect system-wide installation
     include(3rdParty/sqlite/CMakeLists.txt)
 endif()
-add_subdirectory(3rdParty/Proj)
+set(ENABLE_TIFF OFF CACHE BOOL "" FORCE)
+set(ENABLE_CURL OFF CACHE BOOL "" FORCE)
+set(BUILD_PROJSYNC OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(3rdparty/Proj/PROJ)
+include_directories(3rdparty/Proj/PROJ/src)
+include_directories(3rdparty/Proj/PROJ/include)
+
+
 
 
 option(PYBIND "Enable pybind11 bindings" OFF)

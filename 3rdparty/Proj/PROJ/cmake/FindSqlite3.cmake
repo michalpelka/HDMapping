@@ -19,7 +19,11 @@
 # and then again with no specified paths to search the default
 # locations. When an earlier FIND_* succeeds, subsequent FIND_*s
 # searching for the same item do nothing.
-
+# If SQLite was already found by parent project, stop here
+if (SQLite3_FOUND OR SQLITE3_FOUND)
+    MESSAGE(STATUS, "SQLITE found HERE : ${SQLITE3_INCLUDE_DIR}")
+    return()
+endif()
 # try to use framework on mac
 # want clean framework path, not unix compatibility path
 if(APPLE)

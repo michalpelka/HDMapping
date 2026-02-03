@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0.0)
+cmake_minimum_required(VERSION 3.28)
 
 # Download SQLite precompiled zip
 set(SQLITE_TOOLS_DOWNLOAD_ZIP_URL "https://www.sqlite.org/2026/sqlite-tools-win-x64-3510200.zip")
@@ -21,8 +21,8 @@ set(SQLITE_EXTRACT_DIR "${CMAKE_BINARY_DIR}/3rd_binary/SQLITETools")
 if(NOT EXISTS ${SQLITE_EXTRACT_DIR})
     message(STATUS "Extracting SQLITE Tools...")
     file(ARCHIVE_EXTRACT
-            INPUT ${SQLITE_TOOLS_DOWNLOAD_ZIP}
-            DESTINATION ${SQLITE_EXTRACT_DIR}
+        INPUT ${SQLITE_TOOLS_DOWNLOAD_ZIP}
+        DESTINATION ${SQLITE_EXTRACT_DIR}
     )
 endif()
 if(EXISTS ${SQLITE_EXTRACT_DIR})

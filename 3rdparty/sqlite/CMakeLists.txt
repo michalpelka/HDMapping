@@ -28,22 +28,26 @@ install(TARGETS sqlite3
   RUNTIME DESTINATION bin
 )
 
-set(SQLite3_INCLUDE_DIR
+set(SQLITE3_INCLUDE_DIR
     "${sqlite_amalgamation_SOURCE_DIR}"
     CACHE PATH "SQLite3 include dir"
     FORCE
 )
 
-set(SQLite3_LIBRARY
+set(SQLITE3_LIBRARY
     "$<TARGET_FILE:sqlite3>"
     CACHE FILEPATH "SQLite3 library file"
     FORCE
 )
 
+set(SQLITE3_FOUND TRUE CACHE BOOL "" FORCE)
+set(SQLITE3_VERSION "3.43.0" CACHE STRING "" FORCE)
+MESSAGE(STATUS "Sqlite header is ${SQLITE3_INCLUDE_DIR}")
 install(FILES
   "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.h"
   DESTINATION include
 )
+message(STATUS,"SQLITE3_FOUND: ${SQLITE3_FOUND}")
 
 
 
