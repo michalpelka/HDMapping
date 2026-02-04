@@ -395,10 +395,8 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(3rdparty/Proj/PROJ)
 include_directories(3rdparty/Proj/PROJ/src)
 include_directories(3rdparty/Proj/PROJ/include)
+target_link_libraries(proj PRIVATE sqlite3)
 
-if(WIN32)
-    add_dependencies(proj sqlite3)
-endif()
 
 
 option(PYBIND "Enable pybind11 bindings" OFF)
