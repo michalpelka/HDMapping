@@ -385,6 +385,11 @@ if(WIN32)
 
     # On Windows - Proj needs SQLite library as well - those are built from source, with Linux we expect system-wide installation
     include(3rdParty/sqlite/CMakeLists.txt)
+    # Ensure sqlite3 is built before PROJ
+    if(TARGET sqlite3)
+        add_dependencies(proj sqlite3)
+    endif()
+
 endif()
 set(ENABLE_TIFF OFF CACHE BOOL "" FORCE)
 set(ENABLE_CURL OFF CACHE BOOL "" FORCE)
