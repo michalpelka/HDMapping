@@ -4,5 +4,5 @@ project(proj_test)
 
 add_executable(proj_test proj_test.cpp)
 
-target_link_libraries(proj_test PRIVATE  PROJ::proj)
+target_link_libraries(proj_test PRIVATE  PROJ::proj sqlite3)
 add_dependencies(proj_test generate_proj_db)
