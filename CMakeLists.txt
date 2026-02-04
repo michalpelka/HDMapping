@@ -397,7 +397,9 @@ include_directories(3rdparty/Proj/PROJ/src)
 include_directories(3rdparty/Proj/PROJ/include)
 target_link_libraries(proj PRIVATE sqlite3)
 
-
+if(TARGET sqlite3 AND TARGET proj)
+    add_dependencies(proj sqlite3)
+endif()
 
 option(PYBIND "Enable pybind11 bindings" OFF)
 if(PYBIND)
