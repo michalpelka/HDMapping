@@ -385,9 +385,6 @@ if(WIN32)
 
     # On Windows - Proj needs SQLite library as well - those are built from source, with Linux we expect system-wide installation
     include(3rdParty/sqlite/CMakeLists.txt)
-    # Ensure sqlite3 is built before PROJ
-    if(TARGET sqlite3)
-        add_dependencies(proj sqlite3)
     endif()
 
 endif()
@@ -399,7 +396,12 @@ add_subdirectory(3rdparty/Proj/PROJ)
 include_directories(3rdparty/Proj/PROJ/src)
 include_directories(3rdparty/Proj/PROJ/include)
 
-
+if(WIN32)
+    # Ensure sqlite3 is built before PROJ
+    if(TARGET sqlite3)
+        add_dependencies(proj sqlite3)
+        
+endif()
 
 
 option(PYBIND "Enable pybind11 bindings" OFF)
