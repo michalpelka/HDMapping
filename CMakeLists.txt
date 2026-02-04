@@ -400,7 +400,7 @@ if(WIN32)
     # Ensure sqlite3 is built before PROJ
     if(TARGET sqlite3)
         add_dependencies(proj sqlite3)
-        
+    endif()
 endif()
 
 
