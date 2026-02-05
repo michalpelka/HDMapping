@@ -385,7 +385,6 @@ if(WIN32)
 
     # On Windows - Proj needs SQLite library as well - those are built from source, with Linux we expect system-wide installation
     include(3rdParty/sqlite/CMakeLists.txt)
-    endif()
 
 endif()
 set(ENABLE_TIFF OFF CACHE BOOL "" FORCE)
