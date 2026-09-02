@@ -5,6 +5,7 @@ project(core)
 set(CORE_BASE_SOURCES
     src/color_las_loader.cpp
     src/control_points.cpp
+    src/e57_utils.cpp
     src/gnss.cpp
     src/ground_control_points.cpp
     src/imu_preintegration.cpp
@@ -80,7 +81,10 @@ function(add_core_target target_name with_gui)
 
     add_library(${target_name} STATIC ${SOURCES})
     target_compile_definitions(${target_name} PRIVATE ${DEFINES})
-    target_link_libraries(${target_name} PRIVATE core_math ${PLATFORM_LASZIP_LIB} ${PLATFORM_MISCELLANEOUS_LIBS} PROJ::proj spdlog::spdlog vqf Fusion wgs84_do_puwg92 plycpp WGS84toCartesian)
+    # E57Format (+ Xerces-C transitively) is needed by src/e57_utils.cpp. PRIVATE
+    # link: its $<LINK_ONLY> requirement still propagates to the final app link
+    # through core_raylib -> core, so apps don't need to name E57Format.
+    target_link_libraries(${target_name} PRIVATE core_math ${PLATFORM_LASZIP_LIB} ${PLATFORM_MISCELLANEOUS_LIBS} PROJ::proj spdlog::spdlog vqf Fusion wgs84_do_puwg92 plycpp WGS84toCartesian E57Format)
     target_include_directories(${target_name} PRIVATE
         include
         ${EIGEN3_INCLUDE_DIR}
@@ -90,6 +94,7 @@ function(add_core_target target_name with_gui)
         ${EXTERNAL_LIBRARIES_DIRECTORY}/include
         ${THIRDPARTY_DIRECTORY}/vqf/vqf/cpp
         ${THIRDPARTY_DIRECTORY}/Fusion/Fusion
+        ${LIBE57FORMAT_INCLUDE_DIR}
     )
 
     if(${with_gui})

@@ -75,6 +75,34 @@ else()
     message(STATUS "LASzip include dir: ${LASZIP_INCLUDE_DIR}, LASzip library: ${LASZIP_LIBRARY}")
 endif()
 
+# E57 - Apache Xerces-C + libE57Format, both vendored as git submodules and
+# built from source (no system packages). Xerces-C provides the XML parser
+# libE57Format needs; cmake/FindXercesC.cmake redirects libE57Format's
+# find_package(XercesC) to the in-tree `xerces-c` target defined here.
+#
+# NOTE: this block runs (via include(cmake/dependencies.cmake)) before the
+# top-level enable_testing() call, so the ~50 add_test() entries in
+# 3rdparty/xerces-c/tests never register with CTest. The test/sample
+# executables are also kept out of the default build by EXCLUDE_FROM_ALL.
+set(E57_XERCES_PREV_SHARED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)   # link Xerces-C + libE57Format statically into core
+# Xerces-C transcoder/netaccessor/message-loader defaults are the platform
+# native, dependency-free choices (macOS: macosunicodeconverter/cfurl,
+# Windows: windows/winsock, Linux: iconv/socket) -- no ICU, no libcurl.
+add_subdirectory(${THIRDPARTY_DIRECTORY}/xerces-c ${CMAKE_BINARY_DIR}/3rdparty/xerces-c EXCLUDE_FROM_ALL)
+
+# libE57Format: static lib target `E57Format`, headers at libE57Format/include.
+set(E57_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(E57_RELEASE_LTO OFF CACHE BOOL "" FORCE)   # don't force LTO into the wider build
+if(WIN32)
+    set(USING_STATIC_XERCES ON CACHE BOOL "" FORCE)   # adds XERCES_STATIC_LIBRARY define
+endif()
+add_subdirectory(${THIRDPARTY_DIRECTORY}/libE57Format ${CMAKE_BINARY_DIR}/3rdparty/libE57Format EXCLUDE_FROM_ALL)
+set(LIBE57FORMAT_INCLUDE_DIR ${THIRDPARTY_DIRECTORY}/libE57Format/include)
+
+set(BUILD_SHARED_LIBS ${E57_XERCES_PREV_SHARED})
+message(STATUS "Using bundled Xerces-C + libE57Format (static) for E57 support")
+
 # ============================================================================
 # Computer Vision & Geospatial Libraries (Pre-downloaded)
 # ============================================================================
