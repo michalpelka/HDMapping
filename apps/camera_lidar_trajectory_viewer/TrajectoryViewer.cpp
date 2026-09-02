@@ -29,6 +29,7 @@
 #include <fstream>
 #include <iomanip>
 #include <laszip/laszip_api.h>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -246,6 +247,25 @@ struct AppState
     cv::Mat imgViewPending;
     bool imgViewHasNew = false;
     std::thread imgViewThread;
+
+    // ── equirectangular intensity panorama ──────────────────────────────────
+    // Spherical (equirectangular) projection of the loaded cloud's intensity,
+    // rendered from a viewpoint a given arc-length distance along the trajectory.
+    char panoOutBuf[512] = "pano_intensity.png";
+    float panoDistAlong = 0.f; // metres along the trajectory, measured from its start
+    // Defaults follow BOW_PLACE_RECOGNITION_HANDOFF.md: full-res 2048 wide, 60 m
+    // range (keeps distant rigid structure), world-axis orientation (so revisits
+    // with a different heading stay registered instead of shifting horizontally).
+    float panoMaxRange = 60.f; // metres: ignore points farther than this from the viewpoint
+    int panoWidth = 2048; // output width in px (height is always width / 2)
+    int panoSplat = 2; // splat radius in px for each projected point (0 = single pixel)
+    bool panoAlignToPose = false; // orient the panorama to the sensor pose (else world axes)
+    float panoTrajLen = 0.f; // cached total trajectory length, for the distance slider range
+    Texture2D panoTex = {};
+    bool panoTexValid = false;
+    // batch export: one panorama every `panoBatchStep` metres along the trajectory
+    char panoBatchDirBuf[512] = "pano_batch";
+    float panoBatchStep = 5.f;
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -405,6 +425,11 @@ static void loadSession(AppState& s)
         s.traj.loadCSV(cp.string(), M);
     }
     s.traj.sort();
+
+    // cache total trajectory length for the equirectangular panorama's distance slider
+    s.panoTrajLen = 0.f;
+    for (size_t i = 1; i < s.traj.poses.size(); ++i)
+        s.panoTrajLen += (s.traj.poses[i].T.translation() - s.traj.poses[i - 1].T.translation()).norm();
 
     // camera image timestamps
     fs::path camDir = s.cameraBuf[0] ? fs::path(s.cameraBuf) : d.parent_path() / "CAMERA_0";
@@ -956,6 +981,249 @@ static void exportLAZ(AppState& s)
     laszip_close_writer(writer);
     laszip_destroy(writer);
     s.status = "Exported " + std::to_string(s.exportCloud.size()) + " pts → " + s.exportBuf;
+}
+
+// ── equirectangular intensity panorama ───────────────────────────────────────
+// Resolve a viewpoint `arcLen` metres along the trajectory: the translation is
+// linearly interpolated between the two bracketing poses; the orientation is
+// taken from the nearer of the two (no slerp -- good enough for a preview).
+// Returns false only when the trajectory is empty. `outTotal` is the full
+// trajectory length.
+static bool trajPointAtArcLength(
+    const Trajectory& traj, float arcLen, Eigen::Vector3f& outPos, Eigen::Matrix3f& outR, float& outTotal)
+{
+    outTotal = 0.f;
+    if (traj.poses.empty())
+        return false;
+    if (traj.poses.size() == 1)
+    {
+        outPos = traj.poses[0].T.translation();
+        outR = traj.poses[0].T.rotation();
+        return true;
+    }
+    std::vector<float> cum(traj.poses.size(), 0.f);
+    for (size_t i = 1; i < traj.poses.size(); ++i)
+        cum[i] = cum[i - 1] + (traj.poses[i].T.translation() - traj.poses[i - 1].T.translation()).norm();
+    outTotal = cum.back();
+
+    float target = std::clamp(arcLen, 0.f, outTotal);
+    auto it = std::lower_bound(cum.begin(), cum.end(), target);
+    size_t hi = (size_t)(it - cum.begin());
+    if (hi == 0)
+        hi = 1;
+    if (hi >= traj.poses.size())
+        hi = traj.poses.size() - 1;
+    size_t lo = hi - 1;
+    float seg = cum[hi] - cum[lo];
+    float t = seg > 1e-6f ? (target - cum[lo]) / seg : 0.f;
+    outPos = (1.f - t) * traj.poses[lo].T.translation() + t * traj.poses[hi].T.translation();
+    outR = (t < 0.5f ? traj.poses[lo].T : traj.poses[hi].T).rotation();
+    return true;
+}
+
+// Render an equirectangular (spherical) panorama of the loaded cloud's LiDAR
+// intensity, seen from viewpoint `C` with orientation `R`. Each point within
+// `panoMaxRange` is projected to (azimuth, elevation), splatted with a small
+// radius, and z-buffered so the nearest surface wins. Intensity is mapped
+// through JET (matching the viewer's intensity mode); pixels with no data stay
+// black. Returns the BGR image; `hitPts` gets the number of points drawn.
+static cv::Mat renderEquirectImage(const AppState& s, const Eigen::Vector3f& C, const Eigen::Matrix3f& R, int& hitPts)
+{
+    hitPts = 0;
+    const int W = std::clamp(s.panoWidth, 64, 16384);
+    const int H = std::max(32, W / 2);
+    const float maxR = std::max(0.1f, s.panoMaxRange);
+    const int splat = std::clamp(s.panoSplat, 0, 16);
+    const Eigen::Matrix3f Rt = R.transpose();
+    const float kPi = 3.14159265358979f;
+    const float kInf = std::numeric_limits<float>::max();
+
+    cv::Mat depth(H, W, CV_32F, cv::Scalar(kInf));
+    cv::Mat inten(H, W, CV_32F, cv::Scalar(0.f));
+
+    for (const auto& p : s.exportCloud)
+    {
+        Eigen::Vector3f d(p.x - C.x(), p.y - C.y(), p.z - C.z());
+        float rng = d.norm();
+        if (rng < 1e-3f || rng > maxR)
+            continue;
+        Eigen::Vector3f l = s.panoAlignToPose ? Eigen::Vector3f(Rt * d) : d;
+        float az = std::atan2(l.y(), l.x()); // [-pi, pi], 0 == local +X (forward)
+        float el = std::asin(std::clamp(l.z() / rng, -1.f, 1.f)); // [-pi/2, pi/2]
+        int uc = (int)std::floor((az + kPi) / (2.f * kPi) * W); // 0..W, wraps in longitude
+        int vc = (int)std::floor((kPi * 0.5f - el) / kPi * H); // 0..H, row 0 == straight up
+        ++hitPts;
+        for (int dv = -splat; dv <= splat; ++dv)
+        {
+            int v = vc + dv;
+            if (v < 0 || v >= H)
+                continue;
+            for (int du = -splat; du <= splat; ++du)
+            {
+                if (splat > 0 && du * du + dv * dv > splat * splat)
+                    continue;
+                int u = (uc + du) % W;
+                if (u < 0)
+                    u += W;
+                float* dp = depth.ptr<float>(v);
+                if (rng < dp[u])
+                {
+                    dp[u] = rng;
+                    inten.ptr<float>(v)[u] = p.intensity;
+                }
+            }
+        }
+    }
+
+    // intensity (already normalised to ~[0,1]) -> 8-bit -> JET, black where no data
+    cv::Mat gray8(H, W, CV_8U);
+    for (int v = 0; v < H; ++v)
+    {
+        const float* ip = inten.ptr<float>(v);
+        uint8_t* gp = gray8.ptr<uint8_t>(v);
+        for (int u = 0; u < W; ++u)
+            gp[u] = (uint8_t)std::lround(std::clamp(ip[u], 0.f, 1.f) * 255.f);
+    }
+    cv::Mat color;
+    cv::applyColorMap(gray8, color, cv::COLORMAP_JET);
+    color.setTo(cv::Scalar(0, 0, 0), depth == kInf);
+    return color;
+}
+
+// Single panorama from a point `panoDistAlong` metres along the trajectory:
+// write it to `panoOutBuf` and show it in the floating panorama window.
+static void renderEquirect(AppState& s)
+{
+    if (s.exportCloud.empty())
+    {
+        s.status = "Equirect: load cloud first";
+        return;
+    }
+
+    Eigen::Vector3f C;
+    Eigen::Matrix3f R;
+    float total = 0.f;
+    if (!trajPointAtArcLength(s.traj, s.panoDistAlong, C, R, total))
+    {
+        s.status = "Equirect: no trajectory loaded";
+        return;
+    }
+
+    int hitPts = 0;
+    cv::Mat color = renderEquirectImage(s, C, R, hitPts);
+
+    if (!cv::imwrite(s.panoOutBuf, color))
+    {
+        s.status = std::string("Equirect: cannot write ") + s.panoOutBuf;
+        return;
+    }
+
+    // show it in the floating panorama window
+    cv::Mat rgb;
+    cv::cvtColor(color, rgb, cv::COLOR_BGR2RGB);
+    if (s.panoTexValid)
+        UnloadTexture(s.panoTex);
+    Image ri = { rgb.data, rgb.cols, rgb.rows, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8 };
+    s.panoTex = LoadTextureFromImage(ri);
+    s.panoTexValid = s.panoTex.id > 0;
+
+    char buf[320];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "Equirect: %dx%d  %d pts within %.1f m  @ %.1f / %.1f m  -> %s",
+        color.cols,
+        color.rows,
+        hitPts,
+        s.panoMaxRange,
+        std::clamp(s.panoDistAlong, 0.f, total),
+        total,
+        s.panoOutBuf);
+    s.status = buf;
+}
+
+// Batch export: one panorama every `panoBatchStep` metres along the whole
+// trajectory, written to `panoBatchDirBuf` as pano_<idx>_<dist>m.png. Runs
+// synchronously (blocks the UI) -- same as the COLMAP export.
+//
+// Alongside the images it writes `pano_poses.csv` with the viewpoint of every
+// frame:
+//     frame_idx, arclen_m, x, y, z, qw, qx, qy, qz
+// (translation from the loop's `C`, orientation from `R`). Downstream place
+// recognition needs these to turn "frame i <-> frame j" into a metric
+// constraint and to validate candidates by trajectory distance -- see
+// BOW_PLACE_RECOGNITION_HANDOFF.md.
+static void batchExportEquirect(AppState& s)
+{
+    if (s.exportCloud.empty())
+    {
+        s.status = "Equirect batch: load cloud first";
+        return;
+    }
+    if (s.traj.poses.empty())
+    {
+        s.status = "Equirect batch: no trajectory loaded";
+        return;
+    }
+
+    const float step = std::max(0.1f, s.panoBatchStep);
+    fs::path outDir(s.panoBatchDirBuf);
+    std::error_code ec;
+    fs::create_directories(outDir, ec);
+    if (ec)
+    {
+        s.status = "Equirect batch: cannot create " + outDir.string();
+        return;
+    }
+
+    std::ofstream poses(outDir / "pano_poses.csv");
+    if (!poses)
+    {
+        s.status = "Equirect batch: cannot write " + (outDir / "pano_poses.csv").string();
+        return;
+    }
+    poses << "frame_idx,arclen_m,x,y,z,qw,qx,qy,qz\n";
+    poses << std::setprecision(9);
+
+    Eigen::Vector3f C;
+    Eigen::Matrix3f R;
+    float total = 0.f;
+    int n = 0;
+    for (float dist = 0.f; dist <= total + 1e-3f || n == 0; dist += step)
+    {
+        if (!trajPointAtArcLength(s.traj, dist, C, R, total))
+            break;
+        int hitPts = 0;
+        cv::Mat color = renderEquirectImage(s, C, R, hitPts);
+        char name[64];
+        std::snprintf(name, sizeof(name), "pano_%04d_%07.1fm.png", n, dist);
+        if (!cv::imwrite((outDir / name).string(), color))
+        {
+            s.status = std::string("Equirect batch: cannot write ") + (outDir / name).string();
+            return;
+        }
+
+        Eigen::Quaternionf q(R);
+        q.normalize();
+        poses << n << ',' << dist << ',' << C.x() << ',' << C.y() << ',' << C.z() << ',' << q.w() << ',' << q.x() << ',' << q.y() << ','
+              << q.z() << '\n';
+
+        ++n;
+        if (total <= 1e-3f) // single-pose trajectory: one image only
+            break;
+    }
+    poses.close();
+
+    char buf[320];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "Equirect batch: %d panoramas + pano_poses.csv every %.1f m (%.1f m total) -> %s",
+        n,
+        step,
+        total,
+        outDir.string().c_str());
+    s.status = buf;
 }
 
 // ── File actions ─────────────────────────────────────────────────────────────
@@ -1918,6 +2186,66 @@ int main(int argc, char* argv[])
             }
         }
 
+        if (ImGui::CollapsingHeader("Equirectangular Intensity"))
+        {
+            ImGui::PushItemWidth(-1);
+            ImGui::Text("Output PNG:");
+            ImGui::InputText("##panoout", s.panoOutBuf, sizeof(s.panoOutBuf));
+            ImGui::PopItemWidth();
+            // Scoped narrower width -- see the "Load decimation" comment above.
+            ImGui::PushItemWidth(-170.f);
+            ImGui::SliderFloat("Distance along traj (m)", &s.panoDistAlong, 0.f, std::max(1.f, s.panoTrajLen), "%.1f");
+            s.panoDistAlong = std::clamp(s.panoDistAlong, 0.f, std::max(0.f, s.panoTrajLen));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Viewpoint: arc-length distance from the trajectory start.");
+            ImGui::InputFloat("Max range (m)", &s.panoMaxRange, 1.f, 10.f, "%.1f");
+            s.panoMaxRange = std::max(0.1f, s.panoMaxRange);
+            ImGui::InputInt("Image width (px)", &s.panoWidth, 128, 512);
+            s.panoWidth = std::clamp(s.panoWidth, 64, 16384);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Height is always width / 2.");
+            ImGui::InputInt("Splat radius (px)", &s.panoSplat, 1, 2);
+            s.panoSplat = std::clamp(s.panoSplat, 0, 16);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Disc radius drawn per projected point (0 = single pixel).\nRaise to fill gaps in sparse clouds.");
+            ImGui::PopItemWidth();
+            ImGui::PushItemWidth(-1);
+            ImGui::Checkbox("Orient to sensor pose", &s.panoAlignToPose);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("ON: azimuth 0 (image centre) = sensor forward (+X).\nOFF: azimuth measured from world +X.");
+            ImGui::TextDisabled("Trajectory length: %.1f m", s.panoTrajLen);
+            ImGui::BeginDisabled(s.exportCloud.empty());
+            if (ImGui::Button("Render equirectangular", ImVec2(-1, 0)))
+                renderEquirect(s);
+            ImGui::EndDisabled();
+            if (s.exportCloud.empty())
+                ImGui::TextDisabled("Load cloud first");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Batch export along trajectory");
+            ImGui::Text("Output directory:");
+            ImGui::InputText("##panobatchdir", s.panoBatchDirBuf, sizeof(s.panoBatchDirBuf));
+            if (ImGui::Button("Choose folder...##panobatch", ImVec2(-1, 0)))
+                setBuf(
+                    s.panoBatchDirBuf, sizeof(s.panoBatchDirBuf), mandeye::fd::SelectFolder("Select panorama output directory"));
+            ImGui::PopItemWidth();
+            ImGui::PushItemWidth(-170.f);
+            ImGui::InputFloat("Step (m)", &s.panoBatchStep, 1.f, 5.f, "%.1f");
+            s.panoBatchStep = std::max(0.1f, s.panoBatchStep);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Distance between consecutive panoramas along the trajectory.");
+            ImGui::PopItemWidth();
+            ImGui::PushItemWidth(-1);
+            if (s.panoTrajLen > 0.f)
+                ImGui::TextDisabled("~%d panoramas over %.1f m", (int)(s.panoTrajLen / s.panoBatchStep) + 1, s.panoTrajLen);
+            ImGui::BeginDisabled(s.exportCloud.empty() || s.traj.poses.empty());
+            if (ImGui::Button("Export panoramas every step", ImVec2(-1, 0)))
+                batchExportEquirect(s);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Writes pano_<idx>_<dist>m.png + pano_poses.csv (synchronous)");
+            ImGui::PopItemWidth();
+        }
+
         if (ImGui::CollapsingHeader("Export", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushItemWidth(-1);
@@ -2069,6 +2397,25 @@ int main(int argc, char* argv[])
             ImGui::End();
         }
 
+        // ── floating equirectangular panorama window ──────────────────────────
+        if (s.panoTexValid)
+        {
+            ImGui::SetNextWindowPos(ImVec2(8, 500), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(720, 380), ImGuiCond_Once);
+            ImGui::Begin("Equirectangular intensity##pano", nullptr, ImGuiWindowFlags_NoScrollbar);
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            float aspect = (s.panoTex.width > 0) ? (float)s.panoTex.height / (float)s.panoTex.width : 0.5f;
+            int dispW = (int)avail.x;
+            int dispH = (int)(avail.x * aspect);
+            if (aspect > 0.f && dispH > (int)avail.y)
+            {
+                dispH = (int)avail.y;
+                dispW = (int)(avail.y / aspect);
+            }
+            rlImGuiImageSize(&s.panoTex, dispW, dispH);
+            ImGui::End();
+        }
+
         rlImGuiEnd();
         EndDrawing();
     }
@@ -2079,6 +2426,8 @@ int main(int argc, char* argv[])
         s.rosThread.join();
     if (s.imgViewTexValid)
         UnloadTexture(s.imgViewTex);
+    if (s.panoTexValid)
+        UnloadTexture(s.panoTex);
 
     s.cloud.unload();
     if (s.shaderOk)
