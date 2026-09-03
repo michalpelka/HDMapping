@@ -2800,25 +2800,21 @@ void updateE57Poses()
     if (by_file.empty())
     {
         [[maybe_unused]] pfd::message m(
-            "Update e57 poses",
-            "No scans in this session were loaded from an e57 file.",
-            pfd::choice::ok,
-            pfd::icon::warning);
+            "Update e57 poses", "No scans in this session were loaded from an e57 file.", pfd::choice::ok, pfd::icon::warning);
         m.result();
         return;
     }
 
-    const pfd::button choice =
-        pfd::message(
-            "Update e57 poses",
-            "Write updated Data3D poses into " + std::to_string(by_file.size()) +
-                " e57 file(s)?\n\n"
-                "Yes    - overwrite the original file(s) in place\n"
-                "No     - write copies as <name>_updated.e57\n"
-                "Cancel - abort",
-            pfd::choice::yes_no_cancel,
-            pfd::icon::question)
-            .result();
+    const pfd::button choice = pfd::message(
+                                   "Update e57 poses",
+                                   "Write updated Data3D poses into " + std::to_string(by_file.size()) +
+                                       " e57 file(s)?\n\n"
+                                       "Yes    - overwrite the original file(s) in place\n"
+                                       "No     - write copies as <name>_updated.e57\n"
+                                       "Cancel - abort",
+                                   pfd::choice::yes_no_cancel,
+                                   pfd::icon::question)
+                                   .result();
 
     if (choice == pfd::button::cancel)
         return;
@@ -4721,8 +4717,9 @@ void display()
                     if (ImGui::MenuItem("Open e57"))
                         openE57(fillInSession);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Replace the current session with one created from e57 file(s); "
-                                          "embedded per-scan poses are used as initial poses");
+                        ImGui::SetTooltip(
+                            "Replace the current session with one created from e57 file(s); "
+                            "embedded per-scan poses are used as initial poses");
 
                     ImGui::EndMenu();
                 }
@@ -4742,8 +4739,9 @@ void display()
                         updateE57Poses();
                     ImGui::EndDisabled();
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Write the current registered poses back into the Data3D headers "
-                                          "of the source e57 file(s)");
+                        ImGui::SetTooltip(
+                            "Write the current registered poses back into the Data3D headers "
+                            "of the source e57 file(s)");
                 }
 
                 ImGui::Separator();

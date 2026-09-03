@@ -16,10 +16,10 @@ namespace mandeye::e57io
     struct E57Scan
     {
         std::string name;
-        std::vector<Eigen::Vector3d> points;      // cartesian, scan-local, meters
-        std::vector<unsigned short> intensities;  // empty when the scan has no intensity
-        std::vector<Eigen::Vector3d> colors;      // 0..1 RGB, empty when the scan has no color
-        std::vector<double> timestamps;           // seconds, empty when the scan has no timestamps
+        std::vector<Eigen::Vector3d> points; // cartesian, scan-local, meters
+        std::vector<unsigned short> intensities; // empty when the scan has no intensity
+        std::vector<Eigen::Vector3d> colors; // 0..1 RGB, empty when the scan has no color
+        std::vector<double> timestamps; // seconds, empty when the scan has no timestamps
         Eigen::Affine3d pose = Eigen::Affine3d::Identity();
     };
 
@@ -35,8 +35,5 @@ namespace mandeye::e57io
     // failure, leaving `dst_path` in an unspecified state (callers write to a
     // temp file and only swap it in on success).
     bool rewrite_e57_poses(
-        const std::string& src_path,
-        const std::string& dst_path,
-        const std::map<int, Eigen::Affine3d>& new_poses,
-        std::string& error);
+        const std::string& src_path, const std::string& dst_path, const std::map<int, Eigen::Affine3d>& new_poses, std::string& error);
 } // namespace mandeye::e57io

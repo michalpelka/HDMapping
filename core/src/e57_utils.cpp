@@ -76,15 +76,45 @@ namespace mandeye::e57io
             {
                 const auto& f = h.pointFields;
                 auto dbl = [chunk](bool on, std::vector<double>& v, double*& p)
-                { if (on) { v.assign(chunk, 0.0); p = v.data(); } };
+                {
+                    if (on)
+                    {
+                        v.assign(chunk, 0.0);
+                        p = v.data();
+                    }
+                };
                 auto u16 = [chunk](bool on, std::vector<uint16_t>& v, uint16_t*& p)
-                { if (on) { v.assign(chunk, 0); p = v.data(); } };
+                {
+                    if (on)
+                    {
+                        v.assign(chunk, 0);
+                        p = v.data();
+                    }
+                };
                 auto i32 = [chunk](bool on, std::vector<int32_t>& v, int32_t*& p)
-                { if (on) { v.assign(chunk, 0); p = v.data(); } };
+                {
+                    if (on)
+                    {
+                        v.assign(chunk, 0);
+                        p = v.data();
+                    }
+                };
                 auto i8 = [chunk](bool on, std::vector<int8_t>& v, int8_t*& p)
-                { if (on) { v.assign(chunk, 0); p = v.data(); } };
+                {
+                    if (on)
+                    {
+                        v.assign(chunk, 0);
+                        p = v.data();
+                    }
+                };
                 auto flt = [chunk](bool on, std::vector<float>& v, float*& p)
-                { if (on) { v.assign(chunk, 0.0f); p = v.data(); } };
+                {
+                    if (on)
+                    {
+                        v.assign(chunk, 0.0f);
+                        p = v.data();
+                    }
+                };
 
                 dbl(f.cartesianXField, cx, b.cartesianX);
                 dbl(f.cartesianYField, cy, b.cartesianY);
@@ -116,10 +146,7 @@ namespace mandeye::e57io
         // applied to that scan, so 2D images rigidly attached to a moved scan
         // follow it.
         void copy_image2d(
-            const ::e57::Reader& reader,
-            ::e57::Writer& writer,
-            int64_t srcIdx,
-            const std::map<std::string, Eigen::Affine3d>& pose_deltas)
+            const ::e57::Reader& reader, ::e57::Writer& writer, int64_t srcIdx, const std::map<std::string, Eigen::Affine3d>& pose_deltas)
         {
             ::e57::Image2D ih;
             if (!reader.ReadImage2D(srcIdx, ih))
@@ -143,8 +170,7 @@ namespace mandeye::e57io
 
             const int64_t dstIdx = writer.NewImage2D(ih);
 
-            auto copyRepr =
-                [&](::e57::Image2DProjection proj, int64_t jpegSize, int64_t pngSize, int64_t maskSize)
+            auto copyRepr = [&](::e57::Image2DProjection proj, int64_t jpegSize, int64_t pngSize, int64_t maskSize)
             {
                 auto blob = [&](::e57::Image2DType type, int64_t size)
                 {
@@ -335,9 +361,7 @@ namespace mandeye::e57io
                             const double rng = sr[k];
                             const double az = sa[k];
                             const double el = se[k];
-                            p = Eigen::Vector3d(rng * std::cos(el) * std::cos(az),
-                                                rng * std::cos(el) * std::sin(az),
-                                                rng * std::sin(el));
+                            p = Eigen::Vector3d(rng * std::cos(el) * std::cos(az), rng * std::cos(el) * std::sin(az), rng * std::sin(el));
                         }
                         if (!p.allFinite())
                             continue;
@@ -351,9 +375,10 @@ namespace mandeye::e57io
                         }
                         if (has_color)
                         {
-                            scan.colors.emplace_back(normalize(cr[k], cr_lo, cr_hi, 255.0),
-                                                     normalize(cg[k], cg_lo, cg_hi, 255.0),
-                                                     normalize(cb[k], cb_lo, cb_hi, 255.0));
+                            scan.colors.emplace_back(
+                                normalize(cr[k], cr_lo, cr_hi, 255.0),
+                                normalize(cg[k], cg_lo, cg_hi, 255.0),
+                                normalize(cb[k], cb_lo, cb_hi, 255.0));
                         }
                         if (has_time)
                             scan.timestamps.push_back(tstamp[k]);
@@ -367,13 +392,14 @@ namespace mandeye::e57io
                     continue;
                 }
 
-                spdlog::info("e57: loaded scan '{}' ({} points{}{}{}) from '{}'",
-                             scan.name,
-                             scan.points.size(),
-                             has_intensity ? ", intensity" : "",
-                             has_color ? ", rgb" : "",
-                             has_time ? ", time" : "",
-                             path);
+                spdlog::info(
+                    "e57: loaded scan '{}' ({} points{}{}{}) from '{}'",
+                    scan.name,
+                    scan.points.size(),
+                    has_intensity ? ", intensity" : "",
+                    has_color ? ", rgb" : "",
+                    has_time ? ", time" : "",
+                    path);
                 scans.push_back(std::move(scan));
             }
         } catch (const ::e57::E57Exception& e)
@@ -398,10 +424,7 @@ namespace mandeye::e57io
     }
 
     bool rewrite_e57_poses(
-        const std::string& src_path,
-        const std::string& dst_path,
-        const std::map<int, Eigen::Affine3d>& new_poses,
-        std::string& error)
+        const std::string& src_path, const std::string& dst_path, const std::map<int, Eigen::Affine3d>& new_poses, std::string& error)
     {
         error.clear();
         if (src_path == dst_path)
