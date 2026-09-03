@@ -80,16 +80,51 @@ endif()
 # libE57Format needs; cmake/FindXercesC.cmake redirects libE57Format's
 # find_package(XercesC) to the in-tree `xerces-c` target defined here.
 #
-# NOTE: this block runs (via include(cmake/dependencies.cmake)) before the
-# top-level enable_testing() call, so the ~50 add_test() entries in
-# 3rdparty/xerces-c/tests never register with CTest. The test/sample
-# executables are also kept out of the default build by EXCLUDE_FROM_ALL.
-set(E57_XERCES_PREV_SHARED ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)   # link Xerces-C + libE57Format statically into core
+# NOTE: xerces-c's bundled tests/samples are kept out of CTest -- see the
+# add_subdirectory() override further down. libE57Format's own tests are
+# disabled via E57_BUILD_TEST=OFF.
+#
+# xerces-c/cmake/XercesDLL.cmake unconditionally runs
+#   set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries")
+# With no prior cache entry that creates BUILD_SHARED_LIBS=ON in the cache and
+# flips EVERY dependency added afterwards (vqf, Fusion, glad, plycpp, ...) to
+# a DLL with no exported symbols -- on Windows that means no import .lib and a
+# project-wide link failure. Pin a cache entry to OFF up front so that set()
+# becomes a no-op, then remove it so nothing else is affected. HDMapping builds
+# all dependencies statically, so an existing BUILD_SHARED_LIBS is not
+# expected; save and restore it anyway.
+if(DEFINED CACHE{BUILD_SHARED_LIBS})
+    set(_hd_bsl_prev "$CACHE{BUILD_SHARED_LIBS}")
+    set(_hd_bsl_restore ON)
+else()
+    set(_hd_bsl_restore OFF)
+endif()
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "HDMapping links Xerces-C + libE57Format statically" FORCE)
+
+# Keep xerces-c's bundled `tests` and `samples` subdirectories out of the
+# configure entirely: they unconditionally call enable_testing() + add_test()
+# for ~80 sample-driven cases whose executables we never build
+# (EXCLUDE_FROM_ALL), which then fail `ctest` in CI. Override add_subdirectory()
+# to drop those two leaves while the _hd_skip_test_subdirs guard is set; the
+# builtin stays reachable as _add_subdirectory() and the guard is cleared right
+# after so every later add_subdirectory() (libE57Format, core, apps, HDMapping's
+# own tests) behaves normally.
+set(_hd_skip_test_subdirs ON)
+macro(add_subdirectory _hd_dir)
+    get_filename_component(_hd_leaf "${_hd_dir}" NAME)
+    if(_hd_skip_test_subdirs AND (_hd_leaf STREQUAL "tests" OR _hd_leaf STREQUAL "samples"))
+        message(STATUS "Skipping xerces-c '${_hd_leaf}' subdirectory (E57 tests disabled)")
+    else()
+        _add_subdirectory("${_hd_dir}" ${ARGN})
+    endif()
+endmacro()
+
 # Xerces-C transcoder/netaccessor/message-loader defaults are the platform
 # native, dependency-free choices (macOS: macosunicodeconverter/cfurl,
 # Windows: windows/winsock, Linux: iconv/socket) -- no ICU, no libcurl.
 add_subdirectory(${THIRDPARTY_DIRECTORY}/xerces-c ${CMAKE_BINARY_DIR}/3rdparty/xerces-c EXCLUDE_FROM_ALL)
+
+set(_hd_skip_test_subdirs OFF)
 
 # libE57Format: static lib target `E57Format`, headers at libE57Format/include.
 set(E57_BUILD_TEST OFF CACHE BOOL "" FORCE)
@@ -100,7 +135,11 @@ endif()
 add_subdirectory(${THIRDPARTY_DIRECTORY}/libE57Format ${CMAKE_BINARY_DIR}/3rdparty/libE57Format EXCLUDE_FROM_ALL)
 set(LIBE57FORMAT_INCLUDE_DIR ${THIRDPARTY_DIRECTORY}/libE57Format/include)
 
-set(BUILD_SHARED_LIBS ${E57_XERCES_PREV_SHARED})
+if(_hd_bsl_restore)
+    set(BUILD_SHARED_LIBS "${_hd_bsl_prev}" CACHE BOOL "Build shared libraries" FORCE)
+else()
+    unset(BUILD_SHARED_LIBS CACHE)
+endif()
 message(STATUS "Using bundled Xerces-C + libE57Format (static) for E57 support")
 
 # ============================================================================
