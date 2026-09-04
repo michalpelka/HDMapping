@@ -53,7 +53,7 @@ static const std::vector<raylib_widgets::ShortcutEntry> appShortcuts = {
     { "", "Ctrl+O", "Select LIO result directory" },
     { "", "Ctrl+Shift+O", "Select CAMERA_0 directory" },
     { "", "Ctrl+Shift+C", "Open calibration" },
-    { "", "Ctrl+S", "Export colored point cloud" },
+    { "", "Ctrl+S", "Export colored point cloud (LAS/LAZ)" },
     { "Camera", "F", "Front view" },
     { "", "B", "Back view" },
     { "", "L", "Left view" },
@@ -1000,17 +1000,6 @@ static void exportE57(AppState& s)
         s.status = std::string("Export failed: ") + err;
 }
 
-// Dispatch on the output file extension: *.e57 -> exportE57, otherwise LAS/LAZ.
-static void exportColoredCloud(AppState& s)
-{
-    std::string ext = fs::path(s.exportBuf).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext == ".e57")
-        exportE57(s);
-    else
-        exportLAZ(s);
-}
-
 // ── File actions ─────────────────────────────────────────────────────────────
 // Factored out so the File menu items and their keyboard shortcuts (in the
 // main loop below) call the exact same code, matching the openSession()-style
@@ -1062,14 +1051,25 @@ static void handleDroppedPath(AppState& s, const std::string& path)
     }
 }
 
-static void actionExportColoredPointCloud(AppState& s)
+static void actionExportColoredLAZ(AppState& s)
 {
-    std::string defaultName = fs::path(s.exportBuf).filename().string();
-    std::string path = mandeye::fd::SaveFileDialog("Export colored point cloud", mandeye::fd::PointCloudExport_filter, ".laz", defaultName);
+    std::string defaultName = fs::path(s.exportBuf).replace_extension(".laz").filename().string();
+    std::string path = mandeye::fd::SaveFileDialog("Export colored point cloud (LAS/LAZ)", mandeye::fd::LazFilter, ".laz", defaultName);
     if (!path.empty())
     {
         setBuf(s.exportBuf, sizeof(s.exportBuf), path);
-        exportColoredCloud(s);
+        exportLAZ(s);
+    }
+}
+
+static void actionExportColoredE57(AppState& s)
+{
+    std::string defaultName = fs::path(s.exportBuf).replace_extension(".e57").filename().string();
+    std::string path = mandeye::fd::SaveFileDialog("Export colored point cloud (E57)", mandeye::fd::E57_filter, ".e57", defaultName);
+    if (!path.empty())
+    {
+        setBuf(s.exportBuf, sizeof(s.exportBuf), path);
+        exportE57(s);
     }
 }
 
@@ -1526,7 +1526,7 @@ int main(int argc, char* argv[])
             if (ctrlDown && shiftDown && IsKeyPressed(KEY_C))
                 actionOpenCalibration(s);
             if (ctrlDown && IsKeyPressed(KEY_S))
-                actionExportColoredPointCloud(s);
+                actionExportColoredLAZ(s);
 
             if (!ctrlDown && IsKeyPressed(KEY_P))
                 s.showPath = !s.showPath;
@@ -1728,8 +1728,10 @@ int main(int argc, char* argv[])
                 if (ImGui::MenuItem("Open Calibration...", "Ctrl+Shift+C"))
                     actionOpenCalibration(s);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Export Colored Point Cloud...", "Ctrl+S"))
-                    actionExportColoredPointCloud(s);
+                if (ImGui::MenuItem("Export Colored Point Cloud (LAS/LAZ)...", "Ctrl+S"))
+                    actionExportColoredLAZ(s);
+                if (ImGui::MenuItem("Export Colored Point Cloud (E57)..."))
+                    actionExportColoredE57(s);
                 ImGui::Separator();
                 if (ImGui::MenuItem("Select ROS 2 Bag Output Directory..."))
                     actionSelectRosOutputDir(s);
@@ -1974,10 +1976,12 @@ int main(int argc, char* argv[])
         if (ImGui::CollapsingHeader("Export", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushItemWidth(-1);
-            ImGui::Text("Output file (.laz / .las / .e57):");
+            ImGui::Text("Output file:");
             ImGui::InputText("##out", s.exportBuf, sizeof(s.exportBuf));
-            if (ImGui::Button("Export colored cloud", ImVec2(-1, 0)))
-                exportColoredCloud(s);
+            if (ImGui::Button("Export colored LAZ", ImVec2(-1, 0)))
+                actionExportColoredLAZ(s);
+            if (ImGui::Button("Export colored E57", ImVec2(-1, 0)))
+                actionExportColoredE57(s);
             if (!s.exportCloud.empty())
                 ImGui::TextDisabled("%d pts ready to export", (int)s.exportCloud.size());
             ImGui::PopItemWidth();
