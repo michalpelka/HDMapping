@@ -2868,6 +2868,69 @@ void updateE57Poses()
     summary.result();
 }
 
+// Write the whole session out as one multi-scan .e57 file: one Data3D block per
+// point cloud, points in their scan-local frame, each block carrying the current
+// (registered) pose. Independent of the "never write files on e57 load" rule --
+// this is an explicit, user-driven export.
+void saveSessionAsE57()
+{
+    if (session.point_clouds_container.point_clouds.empty())
+    {
+        [[maybe_unused]] pfd::message m(
+            "Save session as e57", "The session has no point clouds to save.", pfd::choice::ok, pfd::icon::warning);
+        m.result();
+        return;
+    }
+
+    std::string default_name = "session.e57";
+    if (!session_file_name.empty())
+        default_name = fs::path(session_file_name).replace_extension(".e57").string();
+
+    const std::string out = mandeye::fd::SaveFileDialog("Save session as e57", mandeye::fd::E57_filter, ".e57", default_name);
+    if (out.empty())
+        return;
+
+    const std::string description = std::string("HDMapping ") + HDMAPPING_VERSION_STRING + " session";
+
+    std::vector<mandeye::e57io::E57WriteScan> scans;
+    scans.reserve(session.point_clouds_container.point_clouds.size());
+    for (const auto& pc : session.point_clouds_container.point_clouds)
+    {
+        mandeye::e57io::E57WriteScan s;
+        s.name = fs::path(pc.file_name).stem().string();
+        s.description = description;
+        s.points = &pc.points_local;
+        if (pc.intensities.size() == pc.points_local.size())
+            s.intensities = &pc.intensities;
+        if (pc.colors.size() == pc.points_local.size())
+            s.colors = &pc.colors;
+        if (pc.timestamps.size() == pc.points_local.size())
+            s.timestamps = &pc.timestamps;
+
+        // File-level pose = session offset (a pure translation) composed with the
+        // scan's registered pose. For e57-loaded sessions the offset is zero.
+        s.pose = pc.m_pose;
+        s.pose.translation() += session.point_clouds_container.offset;
+
+        scans.push_back(std::move(s));
+    }
+
+    std::string err;
+    if (mandeye::e57io::save_e57(out, scans, err))
+    {
+        spdlog::info("Saved session as e57: '{}' ({} scans)", out, scans.size());
+        [[maybe_unused]] pfd::message m(
+            "Save session as e57", "Saved " + std::to_string(scans.size()) + " scan(s) to:\n" + out, pfd::choice::ok, pfd::icon::info);
+        m.result();
+    }
+    else
+    {
+        spdlog::error("Save session as e57 failed: {}", err);
+        [[maybe_unused]] pfd::message m("Save session as e57", "Failed:\n" + err, pfd::choice::ok, pfd::icon::error);
+        m.result();
+    }
+}
+
 void saveSubsession()
 {
     int inx_begin = 0;
@@ -4760,6 +4823,13 @@ void display()
                     ImGui::SetTooltip("Save session according to selections from 'LIO segments editor' window");
                 //}
                 // ImGui::EndDisabled();
+
+                if (ImGui::MenuItem("Save session as e57"))
+                    saveSessionAsE57();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Write every point cloud of the session to one multi-scan .e57 file, "
+                        "each scan carrying its current (registered) pose");
 
                 ImGui::Separator();
                 if (ImGui::BeginMenu("Save all marked scans"))

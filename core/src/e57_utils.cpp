@@ -533,4 +533,168 @@ namespace mandeye::e57io
 
         return true;
     }
+
+    bool save_e57(const std::string& dst_path, const std::vector<E57WriteScan>& scans, std::string& error)
+    {
+        error.clear();
+
+        std::size_t total_written = 0;
+        try
+        {
+            ::e57::Writer writer(dst_path, ::e57::WriterOptions{});
+            if (!writer.IsOpen())
+            {
+                error = "could not create '" + dst_path + "'";
+                return false;
+            }
+
+            for (std::size_t si = 0; si < scans.size(); si++)
+            {
+                const auto& s = scans[si];
+                if (s.points == nullptr || s.points->empty())
+                {
+                    spdlog::warn("save_e57: scan {} ('{}') has no points, skipping", si, s.name);
+                    continue;
+                }
+
+                const std::size_t n = s.points->size();
+                const bool has_i = s.intensities != nullptr && s.intensities->size() == n;
+                const bool has_c = s.colors != nullptr && s.colors->size() == n;
+                const bool has_t = s.timestamps != nullptr && s.timestamps->size() == n;
+
+                ::e57::Data3D header;
+                header.name = s.name.empty() ? ("scan_" + std::to_string(si)) : s.name;
+                header.description = s.description;
+                header.pointCount = n;
+                header.pose = rbt_from_affine(s.pose);
+
+                auto& pf = header.pointFields;
+                pf.cartesianXField = true;
+                pf.cartesianYField = true;
+                pf.cartesianZField = true;
+                pf.pointRangeNodeType = ::e57::NumericalNodeType::Double;
+                if (has_i)
+                {
+                    pf.intensityField = true;
+                    pf.intensityNodeType = ::e57::NumericalNodeType::Float;
+                    header.intensityLimits = { 0.0, 65535.0 };
+                }
+                if (has_c)
+                {
+                    pf.colorRedField = true;
+                    pf.colorGreenField = true;
+                    pf.colorBlueField = true;
+                    header.colorLimits = { 0.0, 255.0, 0.0, 255.0, 0.0, 255.0 };
+                }
+                if (has_t)
+                {
+                    pf.timeStampField = true;
+                    pf.timeNodeType = ::e57::NumericalNodeType::Double;
+                }
+
+                Eigen::Vector3d lo = (*s.points)[0];
+                Eigen::Vector3d hi = (*s.points)[0];
+                for (const auto& p : *s.points)
+                {
+                    lo = lo.cwiseMin(p);
+                    hi = hi.cwiseMax(p);
+                }
+                header.cartesianBounds.xMinimum = lo.x();
+                header.cartesianBounds.yMinimum = lo.y();
+                header.cartesianBounds.zMinimum = lo.z();
+                header.cartesianBounds.xMaximum = hi.x();
+                header.cartesianBounds.yMaximum = hi.y();
+                header.cartesianBounds.zMaximum = hi.z();
+
+                const int64_t di = writer.NewData3D(header);
+
+                const std::size_t chunk = std::min<std::size_t>(kChunk, n);
+                std::vector<double> cx(chunk), cy(chunk), cz(chunk), inten, tim;
+                std::vector<uint16_t> cr, cg, cb;
+
+                ::e57::Data3DPointsDouble buffers;
+                buffers.cartesianX = cx.data();
+                buffers.cartesianY = cy.data();
+                buffers.cartesianZ = cz.data();
+                if (has_i)
+                {
+                    inten.resize(chunk);
+                    buffers.intensity = inten.data();
+                }
+                if (has_c)
+                {
+                    cr.resize(chunk);
+                    cg.resize(chunk);
+                    cb.resize(chunk);
+                    buffers.colorRed = cr.data();
+                    buffers.colorGreen = cg.data();
+                    buffers.colorBlue = cb.data();
+                }
+                if (has_t)
+                {
+                    tim.resize(chunk);
+                    buffers.timeStamp = tim.data();
+                }
+
+                ::e57::CompressedVectorWriter vw = writer.SetUpData3DPointsData(di, chunk, buffers);
+                std::size_t done = 0;
+                while (done < n)
+                {
+                    const std::size_t m = std::min(chunk, n - done);
+                    for (std::size_t k = 0; k < m; k++)
+                    {
+                        const Eigen::Vector3d& p = (*s.points)[done + k];
+                        cx[k] = p.x();
+                        cy[k] = p.y();
+                        cz[k] = p.z();
+                        if (has_i)
+                            inten[k] = static_cast<double>((*s.intensities)[done + k]);
+                        if (has_c)
+                        {
+                            const Eigen::Vector3d& col = (*s.colors)[done + k];
+                            cr[k] = static_cast<uint16_t>(std::lround(std::clamp(col.x(), 0.0, 1.0) * 255.0));
+                            cg[k] = static_cast<uint16_t>(std::lround(std::clamp(col.y(), 0.0, 1.0) * 255.0));
+                            cb[k] = static_cast<uint16_t>(std::lround(std::clamp(col.z(), 0.0, 1.0) * 255.0));
+                        }
+                        if (has_t)
+                            tim[k] = (*s.timestamps)[done + k];
+                    }
+                    vw.write(m);
+                    done += m;
+                }
+                vw.close();
+
+                total_written++;
+                spdlog::info(
+                    "save_e57: wrote scan '{}' ({} points{}{}{}) to '{}'",
+                    header.name,
+                    n,
+                    has_i ? ", intensity" : "",
+                    has_c ? ", rgb" : "",
+                    has_t ? ", time" : "",
+                    dst_path);
+            }
+
+            if (!writer.Close())
+            {
+                error = "failed to finalize '" + dst_path + "'";
+                return false;
+            }
+        } catch (const ::e57::E57Exception& e)
+        {
+            error = "E57 error while writing '" + dst_path + "': " + std::string(e.what()) + " (" + e.context() + ")";
+            return false;
+        } catch (const std::exception& e)
+        {
+            error = "error while writing '" + dst_path + "': " + e.what();
+            return false;
+        }
+
+        if (total_written == 0)
+        {
+            error = "no non-empty scans to write";
+            return false;
+        }
+        return true;
+    }
 } // namespace mandeye::e57io

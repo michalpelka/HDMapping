@@ -36,4 +36,26 @@ namespace mandeye::e57io
     // temp file and only swap it in on success).
     bool rewrite_e57_poses(
         const std::string& src_path, const std::string& dst_path, const std::map<int, Eigen::Affine3d>& new_poses, std::string& error);
+
+    // One scan to write out with save_e57(). Vectors are borrowed (not copied),
+    // so they must outlive the save_e57() call. `points` is required and holds
+    // scan-local cartesian coordinates; `pose` places that frame in the
+    // file-level frame. `intensities` (0..65535), `colors` (0..1 RGB per
+    // channel) and `timestamps` are optional -- pass nullptr or a vector whose
+    // size differs from `points` to omit that field.
+    struct E57WriteScan
+    {
+        std::string name;
+        std::string description; // optional, free text stored in the Data3D block
+        const std::vector<Eigen::Vector3d>* points = nullptr;
+        const std::vector<unsigned short>* intensities = nullptr;
+        const std::vector<Eigen::Vector3d>* colors = nullptr;
+        const std::vector<double>* timestamps = nullptr;
+        Eigen::Affine3d pose = Eigen::Affine3d::Identity();
+    };
+
+    // Writes `scans` as a fresh multi-block E57 file at `dst_path` (overwriting
+    // any existing file). Each scan becomes one Data3D block carrying its pose.
+    // Returns false and fills `error` on failure.
+    bool save_e57(const std::string& dst_path, const std::vector<E57WriteScan>& scans, std::string& error);
 } // namespace mandeye::e57io
