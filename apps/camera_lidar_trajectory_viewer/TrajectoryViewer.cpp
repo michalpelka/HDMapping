@@ -10,6 +10,7 @@
 #include <CalibCore/CliArgs.h>
 #include <CalibCore/PointCloud.h>
 #include <CalibCore/Trajectory.h>
+#include <Core/e57_utils.h>
 #include <Core/pfd_wrapper.hpp>
 #include <HDMapping/PoseInterpolation.h>
 #include <HDMapping/Version.hpp>
@@ -958,6 +959,58 @@ static void exportLAZ(AppState& s)
     s.status = "Exported " + std::to_string(s.exportCloud.size()) + " pts → " + s.exportBuf;
 }
 
+// E57 counterpart of exportLAZ(): one Data3D block, points already in world
+// coordinates (identity pose), RGB + intensity + per-point timestamp.
+static void exportE57(AppState& s)
+{
+    if (s.exportCloud.empty())
+    {
+        s.status = "No cloud to export";
+        return;
+    }
+
+    std::vector<Eigen::Vector3d> pts;
+    std::vector<Eigen::Vector3d> cols;
+    std::vector<unsigned short> inten;
+    std::vector<double> ts;
+    pts.reserve(s.exportCloud.size());
+    cols.reserve(s.exportCloud.size());
+    inten.reserve(s.exportCloud.size());
+    ts.reserve(s.exportCloud.size());
+    for (const auto& p : s.exportCloud)
+    {
+        pts.emplace_back(p.x, p.y, p.z);
+        cols.emplace_back(p.r / 255.0, p.g / 255.0, p.b / 255.0);
+        inten.push_back(static_cast<unsigned short>(std::min(1.f, std::max(0.f, p.intensity)) * 65535.f));
+        ts.push_back(static_cast<double>(p.ts_ns) * 1e-9);
+    }
+
+    mandeye::e57io::E57WriteScan scan;
+    scan.name = "colored_cloud";
+    scan.description = std::string("HDMapping ") + HDMAPPING_VERSION_STRING + " camera_lidar_trajectory_viewer";
+    scan.points = &pts;
+    scan.colors = &cols;
+    scan.intensities = &inten;
+    scan.timestamps = &ts;
+
+    std::string err;
+    if (mandeye::e57io::save_e57(s.exportBuf, { scan }, err))
+        s.status = "Exported " + std::to_string(s.exportCloud.size()) + " pts → " + s.exportBuf;
+    else
+        s.status = std::string("Export failed: ") + err;
+}
+
+// Dispatch on the output file extension: *.e57 -> exportE57, otherwise LAS/LAZ.
+static void exportColoredCloud(AppState& s)
+{
+    std::string ext = fs::path(s.exportBuf).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".e57")
+        exportE57(s);
+    else
+        exportLAZ(s);
+}
+
 // ── File actions ─────────────────────────────────────────────────────────────
 // Factored out so the File menu items and their keyboard shortcuts (in the
 // main loop below) call the exact same code, matching the openSession()-style
@@ -1012,11 +1065,11 @@ static void handleDroppedPath(AppState& s, const std::string& path)
 static void actionExportColoredPointCloud(AppState& s)
 {
     std::string defaultName = fs::path(s.exportBuf).filename().string();
-    std::string path = mandeye::fd::SaveFileDialog("Export colored point cloud", mandeye::fd::LazFilter, ".laz", defaultName);
+    std::string path = mandeye::fd::SaveFileDialog("Export colored point cloud", mandeye::fd::PointCloudExport_filter, ".laz", defaultName);
     if (!path.empty())
     {
         setBuf(s.exportBuf, sizeof(s.exportBuf), path);
-        exportLAZ(s);
+        exportColoredCloud(s);
     }
 }
 
@@ -1921,10 +1974,10 @@ int main(int argc, char* argv[])
         if (ImGui::CollapsingHeader("Export", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushItemWidth(-1);
-            ImGui::Text("Output file (.laz / .las):");
+            ImGui::Text("Output file (.laz / .las / .e57):");
             ImGui::InputText("##out", s.exportBuf, sizeof(s.exportBuf));
-            if (ImGui::Button("Export colored LAZ", ImVec2(-1, 0)))
-                exportLAZ(s);
+            if (ImGui::Button("Export colored cloud", ImVec2(-1, 0)))
+                exportColoredCloud(s);
             if (!s.exportCloud.empty())
                 ImGui::TextDisabled("%d pts ready to export", (int)s.exportCloud.size());
             ImGui::PopItemWidth();

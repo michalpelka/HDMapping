@@ -5,7 +5,6 @@ project(core)
 set(CORE_BASE_SOURCES
     src/color_las_loader.cpp
     src/control_points.cpp
-    src/e57_utils.cpp
     src/gnss.cpp
     src/ground_control_points.cpp
     src/imu_preintegration.cpp
@@ -70,6 +69,17 @@ target_include_directories(core_pfd PUBLIC include)
 target_include_directories(core_pfd PRIVATE ${THIRDPARTY_DIRECTORY}/portable-file-dialogs-master)
 set_target_properties(core_pfd PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# core_e57 -- E57 point-cloud read/write (mandeye::e57io, wrapping libE57Format
+# + Xerces-C). Split out like core_pfd so the camera_lidar_* apps (which link
+# calib_core, not core) can use E57 export without pulling in core_math/PROJ/
+# the rest. Linked PUBLIC into core/core_no_gui below, so existing core
+# consumers still get mandeye::e57io transparently.
+add_library(core_e57 STATIC src/e57_utils.cpp)
+target_include_directories(core_e57 PUBLIC include ${LIBE57FORMAT_INCLUDE_DIR})
+target_include_directories(core_e57 PRIVATE ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(core_e57 PUBLIC E57Format PRIVATE spdlog::spdlog)
+set_target_properties(core_e57 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 function(add_core_target target_name with_gui)
     if(${with_gui})
         set(SOURCES ${CORE_BASE_SOURCES} ${CORE_GUI_SOURCES})
@@ -81,10 +91,9 @@ function(add_core_target target_name with_gui)
 
     add_library(${target_name} STATIC ${SOURCES})
     target_compile_definitions(${target_name} PRIVATE ${DEFINES})
-    # E57Format (+ Xerces-C transitively) is needed by src/e57_utils.cpp. PRIVATE
-    # link: its $<LINK_ONLY> requirement still propagates to the final app link
-    # through core_raylib -> core, so apps don't need to name E57Format.
-    target_link_libraries(${target_name} PRIVATE core_math ${PLATFORM_LASZIP_LIB} ${PLATFORM_MISCELLANEOUS_LIBS} PROJ::proj spdlog::spdlog vqf Fusion wgs84_do_puwg92 plycpp WGS84toCartesian E57Format)
+    # core_e57 (PUBLIC) provides mandeye::e57io + pulls E57Format/Xerces-C onto
+    # the final link line for consumers that call it.
+    target_link_libraries(${target_name} PRIVATE core_math ${PLATFORM_LASZIP_LIB} ${PLATFORM_MISCELLANEOUS_LIBS} PROJ::proj spdlog::spdlog vqf Fusion wgs84_do_puwg92 plycpp WGS84toCartesian PUBLIC core_e57)
     target_include_directories(${target_name} PRIVATE
         include
         ${EIGEN3_INCLUDE_DIR}
@@ -94,7 +103,6 @@ function(add_core_target target_name with_gui)
         ${EXTERNAL_LIBRARIES_DIRECTORY}/include
         ${THIRDPARTY_DIRECTORY}/vqf/vqf/cpp
         ${THIRDPARTY_DIRECTORY}/Fusion/Fusion
-        ${LIBE57FORMAT_INCLUDE_DIR}
     )
 
     if(${with_gui})
