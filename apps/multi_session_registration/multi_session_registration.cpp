@@ -178,6 +178,8 @@ double time_stamp_offset = 0.0;
 struct ProjectSettings
 {
     std::vector<std::string> session_file_names;
+    //! Scale applied to a session on load, keyed by session file name; absent means 1.
+    std::map<std::string, double> session_scales;
 };
 
 // Project file opened or last saved; empty until then (Save project falls back to Save project as).
@@ -1276,6 +1278,8 @@ bool save_project_settings(const std::string& file_name, const ProjectSettings& 
     for (const auto& pc : _project_settings.session_file_names)
     {
         nlohmann::json jfn{ { "session_file_name", pc } };
+        if (const auto it = _project_settings.session_scales.find(pc); it != _project_settings.session_scales.end())
+            jfn["scale"] = it->second;
         jsession_file_names.push_back(jfn);
     }
     jj["session_file_names"] = jsession_file_names;
@@ -1358,6 +1362,56 @@ bool revert_to_initial(std::vector<Session>& sessions)
     return true;
 }
 
+//! @return The project's scale for the session, 1 when none is set.
+double session_scale(const std::string& session_file_name)
+{
+    const auto it = project_settings.session_scales.find(session_file_name);
+    return it == project_settings.session_scales.end() ? 1.0 : it->second;
+}
+
+//! Scales the session about the world origin by @p factor, keeping its poses rigid: local points,
+//! trajectory nodes, own loop closure edges and control points are scaled along with scan positions.
+void scale_session(Session& session, double factor)
+{
+    for (auto& pc : session.point_clouds_container.point_clouds)
+    {
+        for (auto& p : pc.points_local)
+            p *= factor;
+        for (auto& node : pc.local_trajectory)
+            node.m_pose.translation() *= factor;
+        pc.m_pose.translation() *= factor;
+        pc.m_initial_pose.translation() *= factor;
+        pc.m_pose_temp.translation() *= factor;
+        pc.pose.px *= factor;
+        pc.pose.py *= factor;
+        pc.pose.pz *= factor;
+    }
+    for (auto& edge : session.pose_graph_loop_closure.edges)
+    {
+        edge.relative_pose_tb.px *= factor;
+        edge.relative_pose_tb.py *= factor;
+        edge.relative_pose_tb.pz *= factor;
+    }
+    for (auto& cp : session.control_points.cps)
+    {
+        cp.x_source_local *= factor;
+        cp.y_source_local *= factor;
+        cp.z_source_local *= factor;
+    }
+}
+
+//! Rescales session @p index from its current scale to @p scale and records it in the project.
+void set_session_scale(size_t index, double scale)
+{
+    const std::string& name = project_settings.session_file_names[index];
+    scale_session(sessions[index], scale / session_scale(name));
+    if (scale == 1.0)
+        project_settings.session_scales.erase(name);
+    else
+        project_settings.session_scales[name] = scale;
+    invalidateSessionRenderers();
+}
+
 bool save_results(std::vector<Session>& sessions)
 {
     std::string failed;
@@ -1371,9 +1425,26 @@ bool save_results(std::vector<Session>& sessions)
                 std::cout << "not saving poses of point cloud session: " << session.session_file_name << std::endl;
                 continue;
             }
+
+            // The poses file stays unscaled to match the session's LAZ files; the scale lives in the project.
+            auto& pcs = session.point_clouds_container.point_clouds;
+            const double scale = session_scale(session.session_file_name);
+            std::vector<Eigen::Affine3d> scaled_poses;
+            if (scale != 1.0)
+            {
+                for (auto& pc : pcs)
+                {
+                    scaled_poses.push_back(pc.m_pose);
+                    pc.m_pose.translation() /= scale;
+                }
+            }
+
             std::cout << "saving result to: " << session.point_clouds_container.poses_file_name << std::endl;
             if (!session.point_clouds_container.save_poses(fs::path(session.point_clouds_container.poses_file_name).string(), false))
                 failed += "'" + session.point_clouds_container.poses_file_name + "'\n";
+
+            for (size_t k = 0; k < scaled_poses.size(); ++k)
+                pcs[k].m_pose = scaled_poses[k];
         }
     }
 
@@ -1458,6 +1529,7 @@ bool loadProject(const std::string& file_name, ProjectSettings& _project_setting
         fs.close();
 
         _project_settings.session_file_names.clear();
+        _project_settings.session_scales.clear();
 
         std::cout << "Contained sessions:\n";
 
@@ -1466,6 +1538,13 @@ bool loadProject(const std::string& file_name, ProjectSettings& _project_setting
             const std::string fn = fn_json["session_file_name"];
             _project_settings.session_file_names.push_back(fn);
             std::cout << "'" << fn << "'";
+            if (fn_json.contains("scale"))
+            {
+                const double scale = fn_json["scale"].get<double>();
+                if (scale > 0.0)
+                    _project_settings.session_scales[fn] = scale;
+                std::cout << " (scale " << scale << (scale > 0.0 ? ")" : ", ignored)");
+            }
             if (!fs::exists(fn))
                 std::cout << "  (WARNING: session file does not exist! Please manually adapt path)";
             std::cout << "\n";
@@ -1659,6 +1738,8 @@ void appendSession(const std::string& ps)
     {
         Session session;
         session.load(fs::path(ps).string(), is_decimate, bucket_x, bucket_y, bucket_z, calculate_offset);
+        if (const double scale = session_scale(ps); scale != 1.0)
+            scale_session(session, scale);
 
         // making sure irelevant session specific settings that could affect rendering are off
         session.point_clouds_container.xz_intersection = false;
@@ -2194,6 +2275,43 @@ void settings_gui()
                             pc.render_color[1] = sessions[i].render_color[1];
                             pc.render_color[2] = sessions[i].render_color[2];
                         }
+
+                        auto& pcs = sessions[i].point_clouds_container.point_clouds;
+                        if (!pcs.empty())
+                        {
+                            ImGui::SameLine();
+                            int session_point_size = pcs[0].point_size;
+                            ImGui::SetNextItemWidth(ImGuiNumberWidth);
+                            if (ImGui::InputInt(("Points size##" + std::to_string(i)).c_str(), &session_point_size))
+                            {
+                                session_point_size = std::clamp(session_point_size, 1, 10);
+                                for (auto& pc : pcs)
+                                    pc.point_size = session_point_size;
+                            }
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Points size of this session (View > Points size sets all sessions)");
+                        }
+
+                        ImGui::BeginDisabled(sessions[i].is_ground_truth || is_loop_closure_gui);
+                        {
+                            ImGui::SameLine();
+                            double scale = session_scale(project_settings.session_file_names[i]);
+                            ImGui::SetNextItemWidth(ImGuiNumberWidth);
+                            if (ImGui::InputDouble(
+                                    ("Scale##" + std::to_string(i)).c_str(),
+                                    &scale,
+                                    0.0,
+                                    0.0,
+                                    "%.6f",
+                                    ImGuiInputTextFlags_EnterReturnsTrue) &&
+                                scale > 0.0)
+                                set_session_scale(i, scale);
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip(
+                                    "Scale the session about the world origin (Enter to apply).\n"
+                                    "Saved in the project; the poses file stays unscaled.");
+                        }
+                        ImGui::EndDisabled();
                     }
                     ImGui::EndDisabled();
 
@@ -3902,6 +4020,14 @@ void display()
                 }
             }
             session_marked_for_removal.clear();
+
+            const auto& names = project_settings.session_file_names;
+            std::erase_if(
+                project_settings.session_scales,
+                [&names](const auto& kv)
+                {
+                    return std::find(names.begin(), names.end(), kv.first) == names.end();
+                });
 
             if (!sessions.empty())
                 update_timestamp_offset();
