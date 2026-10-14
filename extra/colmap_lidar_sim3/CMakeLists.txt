@@ -9,6 +9,7 @@ find_package(Ceres REQUIRED)
 
 # GUI-free part, shared by the app and its tests.
 add_library(colmap_lidar_sim3_core STATIC
+    camera_projection.cpp
     colmap_model.cpp
     lidar_plane_map.cpp
     sim3_refine.cpp
@@ -31,6 +32,7 @@ endif()
 set(SOURCES
     colmap_lidar_sim3.cpp
     app_shell.cpp
+    camera_view.cpp
 )
 
 add_executable(colmap_lidar_sim3 ${SOURCES})
@@ -63,6 +65,7 @@ target_link_libraries(
   imguizmo_raylib
   ${PLATFORM_LASZIP_LIB}
   ${PLATFORM_MISCELLANEOUS_LIBS}
+  ${OpenCV_LIBS}
   spdlog::spdlog)
 
 if(WIN32)

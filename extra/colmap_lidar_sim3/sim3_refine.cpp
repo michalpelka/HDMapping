@@ -204,6 +204,16 @@ namespace colmap_sim3
         return m;
     }
 
+    Similarity Similarity::fromScaledRotation(double s, const Eigen::Matrix3d& R, const Eigen::Vector3d& t, const Eigen::Vector3d& pivot)
+    {
+        Similarity G;
+        G.q = Eigen::Quaterniond(R).normalized();
+        G.s = s;
+        G.pivot = pivot;
+        G.t = s * (G.q * pivot) + t;
+        return G;
+    }
+
     void pointToPlaneStats(
         const std::vector<Eigen::Vector3d>& world_points,
         const std::vector<char>& active,

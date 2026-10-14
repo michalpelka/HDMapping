@@ -5,6 +5,7 @@ project(colmap_lidar_sim3_tests)
 # doctest, like shared/tests; test_colmap_model.cpp owns main().
 add_executable(colmap_lidar_sim3_tests
     test_colmap_model.cpp
+    test_camera_projection.cpp
     test_lidar_plane_map.cpp
     test_sim3_refine.cpp
 )

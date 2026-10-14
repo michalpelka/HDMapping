@@ -189,6 +189,17 @@ TEST_CASE("similarity affine matches apply")
     CHECK((G.affine() * p - G.apply(p)).norm() < 1e-12);
 }
 
+TEST_CASE("similarity from a scaled rotation keeps its pivot form")
+{
+    const Eigen::Matrix3d R = Eigen::AngleAxisd(1.2, Eigen::Vector3d(0.2, 0.9, -0.3).normalized()).toRotationMatrix();
+    const Eigen::Vector3d t(15.0, -23.9, 1.7);
+    const Eigen::Vector3d pivot(0.4, -0.2, 3.0);
+    const Similarity G = Similarity::fromScaledRotation(2.95, R, t, pivot);
+    CHECK(G.pivot == pivot);
+    for (const Eigen::Vector3d& p : { Eigen::Vector3d(0, 0, 0), Eigen::Vector3d(1, -2, 3), pivot })
+        CHECK((G.apply(p) - (2.95 * R * p + t)).norm() < 1e-12);
+}
+
 TEST_CASE("cameras from a similarity reproduce the transformed points")
 {
     Similarity G;

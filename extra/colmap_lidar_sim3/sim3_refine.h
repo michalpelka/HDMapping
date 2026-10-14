@@ -31,6 +31,9 @@ namespace colmap_sim3
 
         //! @return G as a 4x4 transform with s * R in its linear part.
         Eigen::Affine3d affine() const;
+
+        //! @return The similarity p -> s * R * p + t, expressed about @p pivot; R is re-orthonormalised.
+        static Similarity fromScaledRotation(double s, const Eigen::Matrix3d& R, const Eigen::Vector3d& t, const Eigen::Vector3d& pivot);
     };
 
     //! A camera's similarity, camera frame (COLMAP units) -> world: X = s * R * x + t.
