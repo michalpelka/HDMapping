@@ -160,6 +160,12 @@ if(BUILD_WITH_UTILITY_APPLICATION)
     add_subdirectory(apps/camera_lidar_intrinsics_calib)
 endif()
 
+# Experimental, not for main: COLMAP -> lidar Sim(3) registration (needs Ceres).
+option(BUILD_COLMAP_LIDAR_SIM3 "Build the experimental COLMAP to lidar Sim(3) tool in extra/ (needs Ceres)" OFF)
+if(BUILD_COLMAP_LIDAR_SIM3)
+    add_subdirectory(extra/colmap_lidar_sim3)
+endif()
+
 # NOTE(mwlasiuk) : disable warnings for third party libraries so they do not pollute build logs
 
 ###
