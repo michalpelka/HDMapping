@@ -1,12 +1,14 @@
 #pragma once
 
-// Ceres registration of an SfM (COLMAP) model to a lidar plane map.
-//  - alignSimilarity(): one Sim(3) for the whole model (ICP with point-to-plane residuals).
+// Ceres registration of an SfM (COLMAP) model to a lidar map: point-to-plane against a LidarPlaneMap,
+// or point-to-point against a LidarPointMap.
+//  - alignSimilarity(): one Sim(3) for the whole model (ICP).
 //  - refinePerCamera(): one Sim(3) per camera, each point riding on one anchor camera, with
 //    smoothness between consecutive cameras -- bends the model and lets its scale drift, to undo
 //    the "banana" SfM drift.
 
 #include "lidar_plane_map.h"
+#include "lidar_point_map.h"
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -61,14 +63,14 @@ namespace colmap_sim3
     struct AlignParams
     {
         AssociationSchedule schedule;
-        double sigma_point = 0.05; //!< point-to-plane noise [m]
+        double sigma_point = 0.05; //!< point-to-plane or point-to-point noise [m]
         bool estimate_scale = true;
     };
 
     struct RefineParams
     {
         AssociationSchedule schedule{ 1.0, 0.1, 6, 20 };
-        double sigma_point = 0.05; //!< point-to-plane noise [m]
+        double sigma_point = 0.05; //!< point-to-plane or point-to-point noise [m]
         double sigma_translation = 0.02; //!< relative translation between consecutive cameras [m]
         double sigma_rotation_deg = 0.1; //!< relative rotation between consecutive cameras
         double sigma_scale = 0.001; //!< change of log(scale) between consecutive cameras
@@ -82,7 +84,7 @@ namespace colmap_sim3
         bool ok = false;
         size_t inliers_before = 0;
         size_t inliers_after = 0;
-        double rms_before = 0.0; //!< point-to-plane RMS over inliers [m]
+        double rms_before = 0.0; //!< point-to-plane or point-to-point RMS over inliers [m]
         double rms_after = 0.0;
         std::string message;
     };
@@ -104,14 +106,23 @@ namespace colmap_sim3
         size_t& inliers,
         double& rms);
 
-    //! Global Sim(3) ICP of @p points (COLMAP frame) against @p map.
+    //! Global Sim(3) ICP of @p points (COLMAP frame) against @p map, point-to-plane.
     //! @param active points used for residuals (same size as points)
     //! @param G starting guess on input, result on success; its pivot is kept
-    //! @return false when Ceres fails or no point finds a plane
+    //! @return false when Ceres fails or too few points find a plane
     bool alignSimilarity(
         const std::vector<Eigen::Vector3d>& points,
         const std::vector<char>& active,
         const LidarPlaneMap& map,
+        const AlignParams& params,
+        Similarity& G,
+        SolveStats& stats);
+
+    //! As above, point-to-point against the nearest lidar point.
+    bool alignSimilarity(
+        const std::vector<Eigen::Vector3d>& points,
+        const std::vector<char>& active,
+        const LidarPointMap& map,
         const AlignParams& params,
         Similarity& G,
         SolveStats& stats);
@@ -129,13 +140,22 @@ namespace colmap_sim3
     //! @return Per-camera similarities equal to G applied to the COLMAP poses (the rigid start).
     std::vector<CameraSim3> camerasFromSimilarity(const Similarity& G, const std::vector<Eigen::Affine3d>& T_wc);
 
-    //! Per-camera Sim(3) refinement against @p map.
+    //! Per-camera Sim(3) refinement against @p map, point-to-plane.
     //! @param T_wc COLMAP camera -> world poses in capture order; consecutive ones are smoothed
     //! @param cameras starting values on input (e.g. camerasFromSimilarity), result on success
     bool refinePerCamera(
         const std::vector<Eigen::Affine3d>& T_wc,
         const AnchoredPoints& points,
         const LidarPlaneMap& map,
+        const RefineParams& params,
+        std::vector<CameraSim3>& cameras,
+        SolveStats& stats);
+
+    //! As above, point-to-point against the nearest lidar point.
+    bool refinePerCamera(
+        const std::vector<Eigen::Affine3d>& T_wc,
+        const AnchoredPoints& points,
+        const LidarPointMap& map,
         const RefineParams& params,
         std::vector<CameraSim3>& cameras,
         SolveStats& stats);

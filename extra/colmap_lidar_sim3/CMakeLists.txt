@@ -12,6 +12,8 @@ add_library(colmap_lidar_sim3_core STATIC
     camera_projection.cpp
     colmap_model.cpp
     lidar_plane_map.cpp
+    lidar_point_map.cpp
+    photometric_refine.cpp
     sim3_refine.cpp
 )
 

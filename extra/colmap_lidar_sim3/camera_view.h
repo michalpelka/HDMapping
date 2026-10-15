@@ -6,6 +6,7 @@
 #include "raylib.h"
 
 #include "colmap_model.h"
+#include "photometric_refine.h"
 #include "sim3_refine.h"
 
 #include <Core/point_cloud.h>
@@ -56,6 +57,10 @@ cv::Mat renderLidarProjection(
 
 //! Loads @p file as RGBA, resized to @p width x @p height. @return empty when it cannot be read.
 cv::Mat loadPhoto(const std::string& file, int width, int height);
+
+//! Loads a photo as grey, resized to @p width x @p height, with its mask when @p mask_file exists.
+//! @return an image without pixels when the photo cannot be read
+colmap_sim3::GrayImage loadGrayImage(const std::string& photo_file, const std::string& mask_file, int width, int height);
 
 //! A GPU texture holding the latest uploaded image; must be released while the GL context exists.
 struct GpuImage

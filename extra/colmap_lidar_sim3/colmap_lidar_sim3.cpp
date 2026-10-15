@@ -23,6 +23,8 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <tbb/parallel_for.h>
+
 #include <Eigen/Eigen>
 
 #include <Core/pfd_wrapper.hpp>
@@ -49,6 +51,8 @@
 #include "camera_view.h"
 #include "colmap_model.h"
 #include "lidar_plane_map.h"
+#include "lidar_point_map.h"
+#include "photometric_refine.h"
 #include "sim3_refine.h"
 
 namespace fs = std::filesystem;
@@ -104,7 +108,11 @@ namespace
         cs::LidarPlaneMap planes;
         double planes_voxel = -1.0; //!< voxel the plane map was built with, -1 when not built
         double planes_flatness = -1.0; //!< flatness limit the plane map was built with
+        cs::LidarPointMap points;
+        double points_cell = -1.0; //!< search cell the point map was built with, -1 when not built
+        double points_spacing = -1.0; //!< thinning the point map was built with
         LidarColoring coloring;
+        std::vector<float> gray; //!< per point, for the photometric refinement; filled on first use
     };
 
     SfmData sfm;
@@ -112,6 +120,18 @@ namespace
 
     cs::Similarity G; //!< COLMAP frame -> lidar local frame
     std::vector<cs::CameraSim3> refined; //!< empty until refined; cleared whenever G changes
+    // Photo poses are layered on the geometric ones, which keep placing the SfM points:
+    // photo pose = geometric pose * per-lens rotation, unless a per-camera photometric step replaced it.
+    std::map<uint32_t, Eigen::Quaterniond> lens_rotation; //!< COLMAP camera id -> camera-frame rotation
+    std::vector<cs::LensRotation> lens_estimates; //!< the last estimate, for display
+    std::vector<cs::CameraSim3> photo_poses; //!< per-camera photometric poses; empty when none
+    //! What the last photometric step replaced, for Undo.
+    struct PhotoUndo
+    {
+        bool valid = false;
+        std::map<uint32_t, Eigen::Quaterniond> lens;
+        std::vector<cs::CameraSim3> poses;
+    } photo_undo;
     std::vector<float> scale_plot; //!< refined s_k / G.s along the trajectory
 
     // [0] raw COLMAP points (drawn under G), [1] refined points in the lidar local frame,
@@ -124,6 +144,15 @@ namespace
     float max_reprojection_error = 2.0f;
     double voxel_size = 0.5;
     double max_flatness = 0.1;
+    double point_spacing = 0.05; //!< thinning of the lidar map for point-to-point residuals [m]
+    //! What the ICP and the per-camera refinement pull the SfM points onto.
+    enum class Residual
+    {
+        PointToPlane,
+        PointToPoint,
+    };
+    Residual icp_residual = Residual::PointToPlane;
+    Residual refine_residual = Residual::PointToPlane;
     cs::AlignParams align_params;
     cs::RefineParams refine_params;
 
@@ -153,6 +182,11 @@ namespace
     bool camera_view_open = false;
     int selected_camera = 0;
     std::string images_dir;
+    std::string masks_dir; //!< <image name>.png per photo, 0 = ignore (COLMAP's layout)
+    cs::PhotometricParams photometric_params;
+    cs::LensRotationParams lens_params;
+    int photometric_stride = 4; //!< every Nth photo gets photometric residuals
+    int photometric_width = 512; //!< photos are downscaled to this width [px]
     ProjectionSettings projection;
     CameraViewMode camera_view_mode = CameraViewMode::SideBySide;
     float blend_alpha = 0.5f;
@@ -196,10 +230,31 @@ namespace
         photo_image.release();
     }
 
+    //! Drops the per-camera refinement and anything photometric built on it; lens rotations stay.
     void clearRefinement()
     {
         refined.clear();
+        photo_poses.clear();
+        photo_undo = PhotoUndo{};
         scale_plot.clear();
+    }
+
+    //! Makes @p cams the geometric refinement and refreshes what is drawn from it. Per-camera
+    //! photometric poses were relative to the old one and are dropped.
+    void setRefined(std::vector<cs::CameraSim3> cams)
+    {
+        refined = std::move(cams);
+        photo_poses.clear();
+        photo_undo = PhotoUndo{};
+        sfm_clouds[1].points_local = cs::anchoredWorldPoints(sfm.anchored, refined);
+        sfm_clouds[3].points_local.clear();
+        for (const auto& c : refined)
+            sfm_clouds[3].points_local.push_back(c.t);
+        if (sfm_renderer)
+            sfm_renderer->rebuildAll(sfm_clouds);
+        scale_plot.clear();
+        for (const auto& c : refined)
+            scale_plot.push_back(static_cast<float>(c.s / G.s));
     }
 
     //! Points with a short track or a large reprojection error only follow their anchor camera.
@@ -250,6 +305,8 @@ namespace
 
         sfm = SfmData{};
         sfm.dir = dir;
+        lens_rotation.clear(); // they belong to the previous model's lenses
+        lens_estimates.clear();
         sfm.model = std::move(model);
         sfm.image_ids = cs::imagesSortedByName(sfm.model);
         std::map<uint32_t, int> index_of_image;
@@ -292,6 +349,9 @@ namespace
                 images_dir = (d / "images").string();
                 break;
             }
+        masks_dir.clear();
+        if (!images_dir.empty() && fs::is_directory(fs::path(images_dir).parent_path() / "masks"))
+            masks_dir = (fs::path(images_dir).parent_path() / "masks").string();
         selected_camera = 0;
 
         // One lens of a rig by default, so the TUM file has one pose per timestamp.
@@ -365,11 +425,37 @@ namespace
         return lidar.planes.size() > 0;
     }
 
-    bool readyToRegister()
+    bool ensurePointMap()
+    {
+        if (lidar.clouds.empty())
+            return false;
+        if (lidar.points_cell != voxel_size || lidar.points_spacing != point_spacing)
+        {
+            lidar.points.build(lidar.clouds[0].points_local, voxel_size, point_spacing);
+            lidar.points_cell = voxel_size;
+            lidar.points_spacing = point_spacing;
+            spdlog::info("{} lidar points at {} m spacing", lidar.points.size(), point_spacing);
+        }
+        return lidar.points.size() > 0;
+    }
+
+    const char* residualName(Residual residual)
+    {
+        return residual == Residual::PointToPoint ? "point to point" : "point to plane";
+    }
+
+    bool readyToRegister(Residual residual)
     {
         if (sfm.points.empty() || lidar.clouds.empty())
         {
             setStatus("Open a COLMAP model and a lidar LAZ first");
+            return false;
+        }
+        if (residual == Residual::PointToPoint)
+        {
+            if (ensurePointMap())
+                return true;
+            setStatus("No usable lidar points for point-to-point residuals");
             return false;
         }
         if (!ensurePlaneMap())
@@ -382,11 +468,14 @@ namespace
 
     void runIcp()
     {
-        if (!readyToRegister())
+        if (!readyToRegister(icp_residual))
             return;
         cs::Similarity g = G;
         cs::SolveStats st;
-        if (!cs::alignSimilarity(sfm.points, sfm.active, lidar.planes, align_params, g, st))
+        const bool ok = icp_residual == Residual::PointToPoint
+            ? cs::alignSimilarity(sfm.points, sfm.active, lidar.points, align_params, g, st)
+            : cs::alignSimilarity(sfm.points, sfm.active, lidar.planes, align_params, g, st);
+        if (!ok)
         {
             setStatus("ICP failed: " + st.message);
             return;
@@ -394,52 +483,254 @@ namespace
         G = g;
         clearRefinement();
         std::ostringstream ss;
-        ss << std::fixed << std::setprecision(4) << "ICP (Sim3): inliers " << st.inliers_before << " -> " << st.inliers_after << ", RMS "
-           << st.rms_before << " -> " << st.rms_after << " m, scale " << std::setprecision(6) << G.s;
+        ss << std::fixed << std::setprecision(4) << "ICP (Sim3, " << residualName(icp_residual) << "): inliers " << st.inliers_before
+           << " -> " << st.inliers_after << ", RMS " << st.rms_before << " -> " << st.rms_after << " m, scale " << std::setprecision(6)
+           << G.s;
         setStatus(ss.str());
     }
 
     void runRefine()
     {
-        if (!readyToRegister())
+        if (!readyToRegister(refine_residual))
             return;
         // Continues from the last refinement, so strong bends that start out of reach converge over repeated runs.
         std::vector<cs::CameraSim3> cams = refined.empty() ? cs::camerasFromSimilarity(G, sfm.T_wc) : refined;
         cs::SolveStats st;
-        if (!cs::refinePerCamera(sfm.T_wc, sfm.anchored, lidar.planes, refine_params, cams, st))
+        const bool ok = refine_residual == Residual::PointToPoint
+            ? cs::refinePerCamera(sfm.T_wc, sfm.anchored, lidar.points, refine_params, cams, st)
+            : cs::refinePerCamera(sfm.T_wc, sfm.anchored, lidar.planes, refine_params, cams, st);
+        if (!ok)
         {
             setStatus("Refinement failed: " + st.message);
             return;
         }
-        refined = std::move(cams);
-        sfm_clouds[1].points_local = cs::anchoredWorldPoints(sfm.anchored, refined);
-        sfm_clouds[3].points_local.clear();
-        for (const auto& c : refined)
-            sfm_clouds[3].points_local.push_back(c.t);
-        sfm_renderer->rebuildAll(sfm_clouds);
+        setRefined(std::move(cams));
 
-        scale_plot.clear();
-        for (const auto& c : refined)
-            scale_plot.push_back(static_cast<float>(c.s / G.s));
         const auto [lo, hi] = std::minmax_element(scale_plot.begin(), scale_plot.end());
         std::ostringstream ss;
-        ss << std::fixed << std::setprecision(4) << "Refined per camera: inliers " << st.inliers_before << " -> " << st.inliers_after
-           << ", RMS " << st.rms_before << " -> " << st.rms_after << " m, scale / global " << *lo << " .. " << *hi;
+        ss << std::fixed << std::setprecision(4) << "Refined per camera (" << residualName(refine_residual) << "): inliers "
+           << st.inliers_before << " -> " << st.inliers_after << ", RMS " << st.rms_before << " -> " << st.rms_after
+           << " m, scale / global " << *lo << " .. " << *hi;
         setStatus(ss.str());
     }
 
-    //! Camera @p k (capture order) -> lidar local frame: the refinement if there is one, else G on its COLMAP pose.
-    cs::CameraSim3 currentCamera(size_t k)
+    //! Lidar grey per point for the photometric refinement: from the LAZ RGB if there is any, else intensity.
+    const std::vector<float>& lidarGray()
+    {
+        const PointCloud& pc = lidar.clouds[0];
+        const size_t n = pc.points_local.size();
+        if (lidar.gray.size() != n)
+        {
+            lidar.gray.resize(n);
+            const LidarColoring& c = lidar.coloring;
+            const bool rgb = c.has_rgb && pc.colors.size() == n;
+            const bool intensity = pc.intensities.size() == n;
+            tbb::parallel_for(
+                size_t(0),
+                n,
+                [&](size_t i)
+                {
+                    if (rgb)
+                    {
+                        const Eigen::Vector3d v = pc.colors[i] * c.rgb_scale;
+                        lidar.gray[i] = static_cast<float>(std::clamp(0.299 * v.x() + 0.587 * v.y() + 0.114 * v.z(), 0.0, 255.0));
+                    }
+                    else if (intensity)
+                        lidar.gray[i] = 255.f * std::clamp((float(pc.intensities[i]) - c.intensity_lo) / (c.intensity_hi - c.intensity_lo), 0.f, 1.f);
+                    else
+                        lidar.gray[i] = 128.f;
+                });
+        }
+        return lidar.gray;
+    }
+
+    //! Camera @p k (capture order) -> lidar local frame as the geometry has it (it places the SfM points):
+    //! the per-camera refinement if there is one, else G on its COLMAP pose.
+    cs::CameraSim3 geometricCamera(size_t k)
     {
         if (!refined.empty())
             return refined[k];
         return { (G.q * Eigen::Quaterniond(sfm.T_wc[k].linear())).normalized(), G.apply(sfm.T_wc[k].translation()), G.s };
     }
 
-    //! Camera similarities to export: the refinement if there is one, else G on the COLMAP poses.
-    std::vector<cs::CameraSim3> outputCameras()
+    //! Camera @p k as its photo sees the world: the per-camera photometric pose if there is one, else the
+    //! geometric pose turned by its lens rotation. Used for the camera view and the exported camera poses.
+    cs::CameraSim3 photoCamera(size_t k)
+    {
+        if (!photo_poses.empty())
+            return photo_poses[k];
+        cs::CameraSim3 c = geometricCamera(k);
+        if (const auto it = lens_rotation.find(sfm.model.images.at(sfm.image_ids[k]).camera_id); it != lens_rotation.end())
+            c.q = (c.q * it->second).normalized();
+        return c;
+    }
+
+    std::vector<cs::CameraSim3> geometricCameras()
     {
         return refined.empty() ? cs::camerasFromSimilarity(G, sfm.T_wc) : refined;
+    }
+
+    //! Camera poses to export (TUM, COLMAP images): the photo poses.
+    std::vector<cs::CameraSim3> outputCameras()
+    {
+        std::vector<cs::CameraSim3> cams(sfm.T_wc.size());
+        for (size_t k = 0; k < cams.size(); k++)
+            cams[k] = photoCamera(k);
+        return cams;
+    }
+
+    bool readyForPhotos()
+    {
+        if (sfm.T_wc.empty() || lidar.clouds.empty())
+        {
+            setStatus("Open a COLMAP model and a lidar LAZ first");
+            return false;
+        }
+        if (images_dir.empty())
+        {
+            setStatus("Set the images folder first");
+            return false;
+        }
+        return true;
+    }
+
+    //! Every stride-th photo of each lens (with its mask), downscaled to the working width; loaded = 0 when
+    //! none was found. Counted per lens: a rig's lenses alternate in capture order, so a plain stride of 2
+    //! or 4 would only ever pick one of them.
+    std::vector<cs::PhotometricView> loadPhotometricViews(size_t& loaded)
+    {
+        std::vector<size_t> picked;
+        std::map<uint32_t, int> seen;
+        for (size_t k = 0; k < sfm.T_wc.size(); k++)
+            if (seen[sfm.model.images.at(sfm.image_ids[k]).camera_id]++ % std::max(1, photometric_stride) == 0)
+                picked.push_back(k);
+        std::vector<cs::PhotometricView> views(picked.size());
+        tbb::parallel_for(
+            size_t(0),
+            picked.size(),
+            [&](size_t i)
+            {
+                const size_t k = picked[i];
+                const cs::Image& img = sfm.model.images.at(sfm.image_ids[k]);
+                const cs::Camera& cam = sfm.model.cameras.at(img.camera_id);
+                const int W = photometric_width;
+                const int H = static_cast<int>(std::lround(double(cam.height) * W / double(std::max<uint64_t>(cam.width, 1))));
+                const std::string mask = masks_dir.empty() ? std::string() : (fs::path(masks_dir) / (img.name + ".png")).string();
+                views[i].image = loadGrayImage((fs::path(images_dir) / img.name).string(), mask, W, H);
+                views[i].camera = views[i].image.pixels.empty() ? -1 : static_cast<int>(k);
+                views[i].intrinsics = cam;
+            });
+        loaded = std::count_if(
+            views.begin(),
+            views.end(),
+            [](const cs::PhotometricView& v)
+            {
+                return v.camera >= 0;
+            });
+        if (loaded == 0)
+            setStatus("No photos found under " + images_dir);
+        return views;
+    }
+
+    std::string lensName(uint32_t camera_id)
+    {
+        // Rig folders name the lenses (front/<t>.jpg, back/<t>.jpg); show that when there is one.
+        for (uint32_t id : sfm.image_ids)
+        {
+            const cs::Image& img = sfm.model.images.at(id);
+            if (img.camera_id == camera_id)
+            {
+                const fs::path folder = fs::path(img.name).parent_path();
+                return "camera " + std::to_string(camera_id) + (folder.empty() ? "" : " (" + folder.string() + ")");
+            }
+        }
+        return "camera " + std::to_string(camera_id);
+    }
+
+    void runLensRotation()
+    {
+        if (!readyForPhotos())
+            return;
+        size_t loaded = 0;
+        const std::vector<cs::PhotometricView> views = loadPhotometricViews(loaded);
+        if (loaded == 0)
+            return;
+
+        // Judged against the geometric poses with the current lens rotations, not per-camera photometric poses.
+        std::vector<cs::CameraSim3> cams = geometricCameras();
+        for (size_t k = 0; k < cams.size(); k++)
+            if (const auto it = lens_rotation.find(sfm.model.images.at(sfm.image_ids[k]).camera_id); it != lens_rotation.end())
+                cams[k].q = (cams[k].q * it->second).normalized();
+
+        std::string message;
+        const std::vector<cs::LensRotation> found = cs::estimateLensRotations(lidar.clouds[0].points_local, lidarGray(), views, cams, lens_params, message);
+        if (found.empty())
+        {
+            setStatus("Lens rotation: " + message);
+            return;
+        }
+        photo_undo = PhotoUndo{ true, lens_rotation, photo_poses };
+        for (const cs::LensRotation& lr : found)
+        {
+            const auto it = lens_rotation.find(lr.camera_id);
+            const Eigen::Quaterniond old = it == lens_rotation.end() ? Eigen::Quaterniond::Identity() : it->second;
+            lens_rotation[lr.camera_id] = (old * lr.delta).normalized();
+        }
+        photo_poses.clear(); // they were relative to the old lens rotations
+        lens_estimates = found;
+
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << "Lens rotation:";
+        for (const cs::LensRotation& lr : found)
+            ss << " " << lensName(lr.camera_id) << " yaw " << lr.yaw_deg << ", pitch " << lr.pitch_deg << ", roll " << lr.roll_deg << " deg, NCC "
+               << std::setprecision(3) << lr.ncc_before << " -> " << lr.ncc_after << std::setprecision(2) << " (" << lr.photos << " photos);";
+        setStatus(ss.str());
+    }
+
+    void runPhotometric()
+    {
+        if (!readyForPhotos())
+            return;
+        size_t loaded = 0;
+        const std::vector<cs::PhotometricView> views = loadPhotometricViews(loaded);
+        if (loaded == 0)
+            return;
+
+        std::vector<cs::CameraSim3> cams = outputCameras();
+        cs::PhotometricStats st;
+        if (!cs::refinePhotometric(lidar.clouds[0].points_local, lidarGray(), views, photometric_params, cams, st))
+        {
+            setStatus("Photometric refinement failed: " + st.message);
+            return;
+        }
+        photo_undo = PhotoUndo{ true, lens_rotation, photo_poses };
+        photo_poses = std::move(cams);
+
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << "Photometric per camera: " << st.views << " of " << loaded << " photos, " << st.residuals
+           << " residuals, RMS " << st.rms_before << " -> " << st.rms_after << " grey levels; cameras moved " << std::setprecision(3)
+           << st.mean_rotation_change_deg << " deg, " << st.mean_translation_change << " m on average"
+           << (lidar.coloring.has_rgb ? "" : " (lidar intensity, no RGB)");
+        setStatus(ss.str());
+    }
+
+    void undoPhotometric()
+    {
+        if (!photo_undo.valid)
+            return;
+        lens_rotation = std::move(photo_undo.lens);
+        photo_poses = std::move(photo_undo.poses);
+        photo_undo = PhotoUndo{};
+        setStatus("Last photometric step undone");
+    }
+
+    void resetLensRotations()
+    {
+        photo_undo = PhotoUndo{ true, lens_rotation, photo_poses };
+        lens_rotation.clear();
+        lens_estimates.clear();
+        photo_poses.clear();
+        setStatus("Lens rotations reset");
     }
 
     bool confirmOverwrite(const fs::path& dir)
@@ -482,7 +773,8 @@ namespace
             T.translation() = cams[k].t + lidar.origin;
             out.images.at(sfm.image_ids[k]).setWorldFromCamera(T);
         }
-        const auto world = cs::anchoredWorldPoints(sfm.anchored, cams);
+        // Points from the geometric poses: lens and photometric corrections turn cameras, not the structure.
+        const auto world = cs::anchoredWorldPoints(sfm.anchored, geometricCameras());
         for (size_t i = 0; i < world.size(); i++)
             out.points.at(sfm.point_ids[i]).xyz = world[i] + lidar.origin;
 
@@ -607,7 +899,7 @@ namespace
         // The camera shown in the camera view: its axes, the viewing direction (z) longest.
         if (camera_view_open && selected_camera >= 0 && selected_camera < static_cast<int>(sfm.T_wc.size()))
         {
-            const cs::CameraSim3 c = currentCamera(selected_camera);
+            const cs::CameraSim3 c = photoCamera(selected_camera);
             const Eigen::Matrix3d R = c.q.toRotationMatrix();
             const double len = 1.0;
             rlSetLineWidth(3.0f);
@@ -815,6 +1107,29 @@ namespace
         ImGui::PopID();
     }
 
+    //! A folder path field (Enter to apply) with a "..." button that opens a folder dialog.
+    void folderInput(const char* label, std::string& dir, const char* title)
+    {
+        ImGui::PushID(label);
+        char buf[1024];
+        std::snprintf(buf, sizeof(buf), "%s", dir.c_str());
+        ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 130.0f));
+        if (ImGui::InputText("##dir", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue))
+            dir = buf;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", title);
+        ImGui::SameLine();
+        if (ImGui::Button("..."))
+        {
+            const std::string picked = mandeye::fd::SelectFolder(title);
+            if (!picked.empty())
+                dir = picked;
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(label);
+        ImGui::PopID();
+    }
+
     void positiveInput(const char* label, double& v, const char* format, const char* tooltip)
     {
         ImGui::SetNextItemWidth(120);
@@ -822,6 +1137,23 @@ namespace
         v = std::max(v, 1e-9);
         if (tooltip && ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", tooltip);
+    }
+
+    void residualInputs(const char* id, Residual& residual)
+    {
+        ImGui::PushID(id);
+        if (ImGui::RadioButton("Point to plane", residual == Residual::PointToPlane))
+            residual = Residual::PointToPlane;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Distance to the nearest planar lidar cell; points may slide along walls and floors");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Point to point", residual == Residual::PointToPoint))
+            residual = Residual::PointToPoint;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Distance to the nearest lidar point (thinned to the point spacing); needs no planes.\n"
+                "Converges much slower: give it ~10x the rounds (e.g. 80 rounds of 10 iterations).");
+        ImGui::PopID();
     }
 
     void panel()
@@ -838,6 +1170,8 @@ namespace
             "  %zu points, %s",
             lidar.clouds.empty() ? size_t(0) : lidar.clouds[0].points_local.size(),
             lidar.planes_voxel > 0 ? (std::to_string(lidar.planes.size()) + " planar cells").c_str() : "planes not built yet");
+        if (lidar.points_cell > 0)
+            ImGui::Text("  %zu thinned points for point to point", lidar.points.size());
 
         if (ImGui::CollapsingHeader("Points used"))
         {
@@ -851,12 +1185,17 @@ namespace
                 updateActive();
         }
 
-        if (ImGui::CollapsingHeader("Lidar planes"))
+        if (ImGui::CollapsingHeader("Lidar map"))
         {
-            positiveInput("Voxel size [m]", voxel_size, "%.3f", "Edge of the cells a plane is fitted in; rebuilt on the next ICP/refine");
+            positiveInput(
+                "Voxel size [m]", voxel_size, "%.3f",
+                "Edge of the cells a plane is fitted in, and of the point search cells; rebuilt on the next ICP/refine");
             positiveInput(
                 "Max flatness", max_flatness, "%.3f",
                 "A cell counts as a plane when its smallest spread is below this fraction of the middle one; raise it for rough scenes");
+            positiveInput(
+                "Point spacing [m]", point_spacing, "%.3f",
+                "Point to point: the lidar map keeps one centroid per cell of this edge; rebuilt on the next ICP/refine");
             if (ImGui::Button("Rebuild planes now") && !lidar.clouds.empty())
             {
                 lidar.planes_voxel = -1.0;
@@ -892,8 +1231,9 @@ namespace
                     "Or drag the gizmo's scale ring (around its centre) left/right, or any axis-tip box.");
 
             ImGui::Separator();
+            residualInputs("icp", icp_residual);
             scheduleInputs("icp", align_params.schedule);
-            positiveInput("Point sigma [m]##icp", align_params.sigma_point, "%.3f", "Expected point-to-plane noise");
+            positiveInput("Point sigma [m]##icp", align_params.sigma_point, "%.3f", "Expected point-to-plane or point-to-point noise");
             ImGui::Checkbox("Estimate scale", &align_params.estimate_scale);
             if (ImGui::Button("ICP (Sim3)"))
                 runIcp();
@@ -901,8 +1241,9 @@ namespace
 
         if (ImGui::CollapsingHeader("Per-camera refinement", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            residualInputs("refine", refine_residual);
             scheduleInputs("refine", refine_params.schedule);
-            positiveInput("Point sigma [m]##refine", refine_params.sigma_point, "%.3f", "Expected point-to-plane noise");
+            positiveInput("Point sigma [m]##refine", refine_params.sigma_point, "%.3f", "Expected point-to-plane or point-to-point noise");
             positiveInput(
                 "Smooth translation [m]", refine_params.sigma_translation, "%.4f",
                 "How far the motion between consecutive cameras may deviate from COLMAP's");
@@ -932,6 +1273,90 @@ namespace
                     "##scale", scale_plot.data(), static_cast<int>(scale_plot.size()), 0, "scale / global along the trajectory", FLT_MAX,
                     FLT_MAX, ImVec2(ImGui::GetContentRegionAvail().x, 90));
             }
+        }
+
+        if (ImGui::CollapsingHeader("Photometric refinement"))
+        {
+            ImGui::TextWrapped(
+                "Turns cameras until the lidar's colours (%s) match the photos; the SfM points stay where the geometry put them. "
+                "Run after the per-camera refinement: first the lens rotation, then optionally per camera.",
+                lidar.coloring.has_rgb ? "LAZ RGB" : "intensity: this LAZ has no RGB");
+            folderInput("Images", images_dir, "Folder the COLMAP image names are relative to");
+            folderInput("Masks", masks_dir, "Folder with <image name>.png per photo, 0 = ignore (COLMAP's layout); empty for none");
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Photo stride", &photometric_stride);
+            photometric_stride = std::clamp(photometric_stride, 1, 1000);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Use every Nth photo (both steps)");
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Working width [px]", &photometric_width, 64, 256);
+            photometric_width = std::clamp(photometric_width, 128, 2048);
+
+            ImGui::SeparatorText("1. Lens rotation");
+            ImGui::TextWrapped(
+                "One rotation per lens, shared by all its photos: what a small error in a lens's fixed intrinsics or rig offset looks "
+                "like. Found from the correlation pooled over the photos.");
+            positiveInput("Search range [deg]", lens_params.search_deg, "%.1f", "Half-width of the coarse yaw / pitch / roll search");
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Photos per lens", &lens_params.max_photos_per_lens);
+            lens_params.max_photos_per_lens = std::clamp(lens_params.max_photos_per_lens, 5, 5000);
+            if (ImGui::Button("Estimate lens rotations"))
+                runLensRotation();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Starts from the current lens rotations; replaces any per-camera photometric poses. Blocks the window while it runs.");
+            ImGui::SameLine();
+            ImGui::BeginDisabled(lens_rotation.empty());
+            if (ImGui::Button("Reset lens rotations"))
+                resetLensRotations();
+            ImGui::EndDisabled();
+            for (const auto& [id, cam] : sfm.model.cameras)
+            {
+                const auto it = lens_rotation.find(id);
+                const double total = it == lens_rotation.end() ? 0.0 : it->second.angularDistance(Eigen::Quaterniond::Identity()) * 180.0 / M_PI;
+                ImGui::BulletText("%s: %.2f deg", lensName(id).c_str(), total);
+                for (const cs::LensRotation& lr : lens_estimates)
+                    if (lr.camera_id == id)
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled(
+                            "(last: yaw %+.2f, pitch %+.2f, roll %+.2f; NCC %.3f -> %.3f, %zu photos)", lr.yaw_deg, lr.pitch_deg, lr.roll_deg,
+                            lr.ncc_before, lr.ncc_after, lr.photos);
+                    }
+            }
+
+            ImGui::SeparatorText("2. Per camera");
+            positiveInput("Max range [m]##photo", photometric_params.max_range, "%.1f", "Lidar points further from the camera are not used");
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Pyramid levels", &photometric_params.levels);
+            photometric_params.levels = std::clamp(photometric_params.levels, 1, 6);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Iterations / level", &photometric_params.iterations);
+            photometric_params.iterations = std::clamp(photometric_params.iterations, 1, 200);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Cell [px]", &photometric_params.cell_px);
+            photometric_params.cell_px = std::clamp(photometric_params.cell_px, 4, 128);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("At most one lidar point per cell of the (downscaled) photo, where the photo gradient is strongest");
+            positiveInput("Min gradient", photometric_params.min_gradient, "%.1f", "Photo gradient a point needs [grey levels / px]");
+            positiveInput("Intensity sigma", photometric_params.sigma_intensity, "%.1f", "Photometric noise [grey levels]");
+            positiveInput(
+                "Smooth translation [m]##photo", photometric_params.sigma_translation, "%.4f",
+                "How far the motion between consecutive cameras may change from before this step");
+            positiveInput("Smooth rotation [deg]##photo", photometric_params.sigma_rotation_deg, "%.4f", nullptr);
+            positiveInput(
+                "Prior translation [m]##photo", photometric_params.prior_sigma_translation, "%.3f", "How far a camera may move from before this step");
+            positiveInput("Prior rotation [deg]##photo", photometric_params.prior_sigma_rotation_deg, "%.3f", nullptr);
+            if (ImGui::Button("Refine photometrically per camera"))
+                runPhotometric();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Starts from the current photo poses (geometry plus lens rotations). Blocks the window while it runs.");
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!photo_undo.valid);
+            if (ImGui::Button("Undo##photo"))
+                undoPhotometric();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Undoes the last lens rotation, reset or per-camera step");
         }
 
         if (ImGui::CollapsingHeader("Output"))
@@ -1038,7 +1463,7 @@ namespace
         ImGui::SliderInt("##camera", &selected_camera, 0, n - 1, "image %d (capture order)");
         ImGui::SameLine();
         if (ImGui::Button("Center 3D view"))
-            setNewRotationCenter(currentCamera(selected_camera).t);
+            setNewRotationCenter(photoCamera(selected_camera).t);
 
         const cs::Image& image = sfm.model.images.at(sfm.image_ids[selected_camera]);
         const cs::Camera& cam = sfm.model.cameras.at(image.camera_id);
@@ -1102,18 +1527,7 @@ namespace
             ImGui::SetNextItemWidth(120);
             ImGui::SliderInt("Splat radius [px]", &projection.splat_radius, 0, 5);
 
-            char buf[1024];
-            std::snprintf(buf, sizeof(buf), "%s", images_dir.c_str());
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160);
-            if (ImGui::InputText("##images", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue))
-                images_dir = buf;
-            ImGui::SameLine();
-            if (ImGui::Button("Images folder..."))
-            {
-                const std::string dir = mandeye::fd::SelectFolder("Folder the COLMAP image names are relative to");
-                if (!dir.empty())
-                    images_dir = dir;
-            }
+            folderInput("Images", images_dir, "Folder the COLMAP image names are relative to");
             ImGui::TreePop();
         }
 
@@ -1121,7 +1535,7 @@ namespace
         const double scale = double(projection.width) / double(std::max<uint64_t>(cam.width, 1));
         const int W = static_cast<int>(std::lround(cam.width * scale));
         const int H = static_cast<int>(std::lround(cam.height * scale));
-        const cs::CameraSim3 pose = currentCamera(selected_camera);
+        const cs::CameraSim3 pose = photoCamera(selected_camera);
         const ProjectionKey key{ selected_camera, pose.q.coeffs(), pose.t, projection, &lidar.clouds[0] };
         if (!(key == projection_key) && !ImGuizmo::IsUsing())
         {
@@ -1224,7 +1638,7 @@ namespace
             double best = std::numeric_limits<double>::max();
             for (size_t k = 0; k < sfm.T_wc.size(); k++)
             {
-                const double d = raylib_widgets::distancePointToLine(currentCamera(k).t, origin, dir);
+                const double d = raylib_widgets::distancePointToLine(photoCamera(k).t, origin, dir);
                 if (d < best)
                 {
                     best = d;

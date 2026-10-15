@@ -7,6 +7,8 @@ add_executable(colmap_lidar_sim3_tests
     test_colmap_model.cpp
     test_camera_projection.cpp
     test_lidar_plane_map.cpp
+    test_lidar_point_map.cpp
+    test_photometric_refine.cpp
     test_sim3_refine.cpp
 )
 

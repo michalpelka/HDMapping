@@ -158,6 +158,31 @@ cv::Mat loadPhoto(const std::string& file, int width, int height)
     return rgba;
 }
 
+colmap_sim3::GrayImage loadGrayImage(const std::string& photo_file, const std::string& mask_file, int width, int height)
+{
+    colmap_sim3::GrayImage out;
+    const cv::Mat gray = cv::imread(photo_file, cv::IMREAD_GRAYSCALE);
+    if (gray.empty() || width <= 0 || height <= 0)
+        return out;
+    cv::Mat resized;
+    cv::resize(gray, resized, cv::Size(width, height), 0, 0, cv::INTER_AREA);
+    out.width = width;
+    out.height = height;
+    out.pixels.assign(resized.begin<uint8_t>(), resized.end<uint8_t>());
+
+    if (!mask_file.empty())
+    {
+        const cv::Mat mask = cv::imread(mask_file, cv::IMREAD_GRAYSCALE);
+        if (!mask.empty())
+        {
+            cv::Mat small;
+            cv::resize(mask, small, cv::Size(width, height), 0, 0, cv::INTER_NEAREST);
+            out.mask.assign(small.begin<uint8_t>(), small.end<uint8_t>());
+        }
+    }
+    return out;
+}
+
 void GpuImage::upload(const cv::Mat& rgba)
 {
     if (rgba.empty() || rgba.type() != CV_8UC4)

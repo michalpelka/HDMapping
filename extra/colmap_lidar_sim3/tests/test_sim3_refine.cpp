@@ -176,6 +176,17 @@ namespace
         G.t = m.block<3, 3>(0, 0) * G.pivot + m.block<3, 1>(0, 3) + Eigen::Vector3d(0.3, -0.2, 0.1);
         return G;
     }
+
+    //! The recovered scale follows the injected drift (relative to the middle camera, which has none).
+    void checkScaleDrift(const std::vector<CameraSim3>& cams, const Scene& sc)
+    {
+        const size_t mid = cams.size() / 2;
+        for (size_t k = 0; k < cams.size(); k += 10)
+        {
+            const double expected = sc.true_sfm_to_world_scale[k] / sc.true_sfm_to_world_scale[mid];
+            CHECK(cams[k].s / cams[mid].s == doctest::Approx(expected).epsilon(0.02));
+        }
+    }
 } // namespace
 
 TEST_CASE("similarity affine matches apply")
@@ -262,14 +273,7 @@ TEST_CASE("per-camera refinement unbends a banana")
     CHECK(rms_global > 0.2);
     CHECK(rms_refined < 0.05);
     CHECK(stats.rms_after < stats.rms_before);
-
-    // The recovered scale follows the injected drift (relative to the middle camera, which has none).
-    const size_t mid = cams.size() / 2;
-    for (size_t k = 0; k < cams.size(); k += 10)
-    {
-        const double expected = sc.true_sfm_to_world_scale[k] / sc.true_sfm_to_world_scale[mid];
-        CHECK(cams[k].s / cams[mid].s == doctest::Approx(expected).epsilon(0.02));
-    }
+    checkScaleDrift(cams, sc);
 }
 
 TEST_CASE("repeated refinement reaches a banana that starts out of reach")
@@ -298,4 +302,52 @@ TEST_CASE("repeated refinement reaches a banana that starts out of reach")
     MESSAGE("camera centre RMS: one pass " << rms_one_pass << " m, three passes " << rms_three_passes << " m");
     CHECK(rms_one_pass > 0.1);
     CHECK(rms_three_passes < 0.05);
+}
+
+// Nearest-point matches pin each point to one spot instead of letting it slide along a surface, so
+// point-to-point needs many more association rounds than point-to-plane.
+TEST_CASE("point-to-point ICP recovers a similarity on an undistorted model")
+{
+    const Scene sc = makeBananaScene(0.0, 0.0, 0.0);
+    LidarPointMap map;
+    map.build(sc.lidar, 0.5, 0.05);
+
+    Similarity G = roughInitialGuess(sc);
+    AlignParams params;
+    params.schedule = { 1.0, 0.1, 80, 10 };
+    SolveStats stats;
+    REQUIRE_MESSAGE(alignSimilarity(sc.sfm_points, std::vector<char>(sc.sfm_points.size(), 1), map, params, G, stats), stats.message);
+
+    CHECK(stats.rms_after < stats.rms_before);
+    CHECK(G.s == doctest::Approx(sc.true_sfm_to_world_scale[0]).epsilon(0.002));
+    CHECK(centreRms(camerasFromSimilarity(G, sc.sfm_T_wc), sc.true_T_wc) < 0.02);
+}
+
+TEST_CASE("point-to-point refinement unbends a banana")
+{
+    const Scene sc = makeBananaScene(0.04, 0.02, 0.05);
+    LidarPointMap map;
+    map.build(sc.lidar, 0.5, 0.05);
+    const std::vector<char> active(sc.sfm_points.size(), 1);
+
+    Similarity G = roughInitialGuess(sc);
+    AlignParams align;
+    align.schedule = { 1.0, 0.3, 80, 10 };
+    SolveStats stats;
+    REQUIRE_MESSAGE(alignSimilarity(sc.sfm_points, active, map, align, G, stats), stats.message);
+    const double rms_global = centreRms(camerasFromSimilarity(G, sc.sfm_T_wc), sc.true_T_wc);
+
+    std::vector<CameraSim3> cams = camerasFromSimilarity(G, sc.sfm_T_wc);
+    const AnchoredPoints anchored = anchorPoints(sc.sfm_T_wc, sc.sfm_points, sc.tracks, active);
+    RefineParams refine;
+    refine.schedule = { 1.0, 0.1, 160, 10 };
+    REQUIRE_MESSAGE(refinePerCamera(sc.sfm_T_wc, anchored, map, refine, cams, stats), stats.message);
+    const double rms_refined = centreRms(cams, sc.true_T_wc);
+
+    // Points settle on the nearest of the lidar samples 10 cm apart, which bounds the accuracy.
+    MESSAGE("camera centre RMS: global " << rms_global << " m, refined " << rms_refined << " m");
+    CHECK(rms_global > 0.2);
+    CHECK(rms_refined < 0.1);
+    CHECK(stats.rms_after < stats.rms_before);
+    checkScaleDrift(cams, sc);
 }
