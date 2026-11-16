@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lidar_odometry_utils.h"
+#include "run_report.h"
 
 #include <spdlog/spdlog.h>
 
@@ -13,6 +14,7 @@
 //! reset: its second half becomes the new buffer and is folded into the buckets point by point, in order. Kept in a
 //! file instead of RAM, and streamed back in the same order with the ray-cast decision of its whole size, the buckets
 //! and so the trajectory are the ones the in-memory buffer gives; the RAM is one chunk. Empty directory = in memory.
+//! The exception is params.decimation > 0: the in-memory buffer is decimated at a reset and this one is not, so they differ.
 //!
 //! One spill file per compute_step_2 call, owned by a PointsGlobalSpill on that call's stack and reached through
 //! LidarOdometryParams::points_global_spill: created on entry, its final close checked on success, removed on every exit.
@@ -77,13 +79,21 @@ void PointsGlobalSpill::reset(Update update)
             fail("reset read/write failed on '" + old_path.string() + "'");
         update(chunk, ray_cast);
         done += m;
+        if (params_.run_report)
+            params_.run_report->spillSize((n_ + done) * sizeof(Point3Di));
     }
     std::fclose(in_);
     in_ = nullptr;
     std::error_code ec;
     std::filesystem::remove(old_path, ec);
     if (ec)
+    {
         spdlog::warn("points_global spill: could not remove '{}': {}", old_path.string(), ec.message());
+        if (params_.run_report)
+            params_.run_report->fail("Spill cleanup failed: " + old_path.string() + ": " + ec.message());
+    }
     pending_remove_.clear();
     n_ = keep;
+    if (params_.run_report)
+        params_.run_report->spillSize(n_ * sizeof(Point3Di));
 }

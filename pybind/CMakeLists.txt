@@ -185,6 +185,8 @@ target_link_libraries(
 
     core_no_gui
 
+    spdlog::spdlog
+
     ${PLATFORM_LASZIP_LIB}
 
     vqf
@@ -192,7 +194,8 @@ target_link_libraries(
     ${PLATFORM_MISCELLANEOUS_LIBS}
 )
 target_link_libraries(lidar_odometry_py
-    PRIVATE pybind11::module
+    PRIVATE step1_run_report
+            pybind11::module
             core_no_gui
             unordered_dense::unordered_dense
             spdlog::spdlog

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.0.0)
 
-project(hd-mapping VERSION 0.106.0)
+project(hd-mapping VERSION 0.107.0)
 
 # Common settings
 set(CMAKE_CXX_STANDARD 20)
@@ -107,6 +107,7 @@ include(cmake/dependencies.cmake)
 # e.g. core/include/Core/raylib_render.hpp) that links against them. Required
 # unconditionally: apps/multi_view_tls_registration (step2) is raylib-based.
 include(cmake/raylib.cmake)
+include(cmake/step1_run_report.cmake)
 
 # ============================================================================
 # Core Library
@@ -122,6 +123,7 @@ option(BUILD_TESTING "Build HDMapping unit tests" OFF)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(shared/tests)
+    add_subdirectory(core/tests)
     add_subdirectory(calib_core/tests)
     add_subdirectory(apps/lidar_odometry_step_1/tests)
     add_subdirectory(rosbags/tests)

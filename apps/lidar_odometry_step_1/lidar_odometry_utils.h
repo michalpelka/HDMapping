@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -47,6 +48,7 @@ inline std::string get_software_version()
 }
 
 struct RawCloudLoader; // raw_cloud_loader.h: raw point clouds loaded per file during step 1
+class RunReport;
 class PointsGlobalSpill; // points_global_spill.h: step 2's map buffer kept in a file
 
 struct LidarOdometryParams
@@ -71,8 +73,14 @@ struct LidarOdometryParams
     // runtime state of the two options above, not parameters (not saved to the parameter file)
     std::shared_ptr<RawCloudLoader> raw_cloud_loader;
     PointsGlobalSpill* points_global_spill = nullptr;
+    std::shared_ptr<RunReport> run_report; // runtime accounting, never a processing parameter
+
+    // Optional GUI observer, called by the producer only at safe trajectory boundaries.
+    std::function<void(const std::vector<WorkerData>&, bool)> publish_trajectory;
+    std::function<void(const Eigen::Vector3d&)> publish_processing_head; // completed worker, never the predicted tail
 
     // filter points
+    bool skip_first_file = true; // drop the first LAZ file's points during load (IMU data is kept)
     double filter_threshold_xy_inner = 0.3; // filtering points during load
     double filter_threshold_xy_outer = 70.0; // filtering points during load
     double decimation = 0.01; // filtering points during load
@@ -193,16 +201,20 @@ struct LidarOdometryParams
     // other
     Eigen::Affine3d m_g = Eigen::Affine3d::Identity();
     std::vector<Point3Di> initial_points;
+    uint64_t initial_points_revision = 0; // GUI thread
     double consecutive_distance = 0.0;
     std::vector<Point3Di> reference_points;
+    uint64_t reference_points_revision = 0; // GUI thread
     // NDTBucketMapType reference_buckets;
     double total_length_of_calculated_trajectory = 0.0;
 
     std::mutex mutex_buckets_indoor;
     NDTBucketMapType buckets_indoor;
+    uint64_t buckets_indoor_revision = 0; // protected by mutex_buckets_indoor
 
     std::mutex mutex_buckets_outdoor;
     NDTBucketMapType buckets_outdoor;
+    uint64_t buckets_outdoor_revision = 0; // protected by mutex_buckets_outdoor
 
 #if WITH_GUI == 1
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
@@ -344,13 +356,29 @@ std::vector<std::tuple<std::pair<double, double>, Eigen::Vector3f, Eigen::Vector
 //! @param ommit_points_with_timestamp_equals_zero - if true, points with timestamp == 0 will be omited
 //! @param filter_threshold_xy - threshold for filtering points in xy plane
 //! @param calibrations - map of calibrations for each scanner key is scanner id.
+//! @param rings - if not null, receives each returned point's laser ring, read from the
+//! uint16 LAS extra-bytes attribute "ring" (0 for every point when the file has none)
 //! @return vector of points of @ref Point3Di type
 std::vector<Point3Di> load_point_cloud(
     const std::string& lazFile,
     bool ommit_points_with_timestamp_equals_zero,
     double filter_threshold_xy_inner,
     double filter_threshold_xy_outer,
-    const std::unordered_map<int, Eigen::Affine3d>& calibrations);
+    const std::unordered_map<int, Eigen::Affine3d>& calibrations,
+    std::vector<uint16_t>* rings = nullptr);
+
+//! A stretch of time without LiDAR points, in seconds.
+struct LidarGap
+{
+    double start;
+    double length;
+};
+
+//! Finds gaps in LiDAR data, e.g. a recording damaged by a hardware/firmware fault or by copying.
+//! @param points - points sorted by timestamp, as returned by @ref load_point_cloud after sorting
+//! @param min_gap_s - smallest gap to report, in seconds
+//! @return gaps longer than min_gap_s between consecutive points, in time order
+std::vector<LidarGap> find_lidar_gaps(const std::vector<Point3Di>& points, double min_gap_s);
 
 bool save_poses(const std::string& file_name, const std::vector<Eigen::Affine3d>& m_poses, const std::vector<std::string>& filenames);
 

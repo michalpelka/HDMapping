@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 4.0.0)
 
 project(lidar_odometry_step_1_tests)
 
-# Unit tests for the MLvxCalib namespace (lidar_odometry_utils.h/.cpp), which
-# parses Livox extrinsic/IMU calibration files (.json/.mjc and .sn). Compiles
+# Unit tests for lidar_odometry_utils.h/.cpp: the MLvxCalib namespace, which
+# parses Livox extrinsic/IMU calibration files (.json/.mjc and .sn), and
+# find_lidar_gaps(). Compiles
 # the real lidar_odometry_utils.cpp (no GUI code path, WITH_GUI left
 # undefined) instead of the whole lidar_odometry_step_1 app, so the include
 # dirs/link libraries below are the subset that TU actually needs: laszip and
@@ -14,6 +15,7 @@ project(lidar_odometry_step_1_tests)
 # same as shared/tests.
 add_executable(lidar_odometry_step_1_tests
     test_mlvx_calib.cpp
+    test_lidar_gaps.cpp
     ../lidar_odometry_utils.cpp
 )
 

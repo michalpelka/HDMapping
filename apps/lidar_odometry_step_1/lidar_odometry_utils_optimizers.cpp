@@ -1,6 +1,7 @@
 #include "hdmapping_profiler.hpp"
 #include "lidar_odometry_utils.h"
 #include "points_global_spill.h"
+#include "run_report.h"
 #include <spdlog/spdlog.h>
 #include <spdlog/stopwatch.h>
 #include <tbb/combinable.h>
@@ -1364,18 +1365,12 @@ void optimize_lidar_odometry(
         ir + 1, ir + 1, 1.0 / (lidar_odometry_motion_model_fix_origin_y_1_sigma_m * lidar_odometry_motion_model_fix_origin_y_1_sigma_m));
     tripletListP.emplace_back(
         ir + 2, ir + 2, 1.0 / (lidar_odometry_motion_model_fix_origin_z_1_sigma_m * lidar_odometry_motion_model_fix_origin_z_1_sigma_m));
-    tripletListP.emplace_back(
-        ir + 3,
-        ir + 3,
-        1.0 / (lidar_odometry_motion_model_fix_origin_om_1_sigma_deg * lidar_odometry_motion_model_fix_origin_om_1_sigma_deg));
-    tripletListP.emplace_back(
-        ir + 4,
-        ir + 4,
-        1.0 / (lidar_odometry_motion_model_fix_origin_fi_1_sigma_deg * lidar_odometry_motion_model_fix_origin_fi_1_sigma_deg));
-    tripletListP.emplace_back(
-        ir + 5,
-        ir + 5,
-        1.0 / (lidar_odometry_motion_model_fix_origin_ka_1_sigma_deg * lidar_odometry_motion_model_fix_origin_ka_1_sigma_deg));
+    const double sigma_fix_origin_om = lidar_odometry_motion_model_fix_origin_om_1_sigma_deg * DEG_TO_RAD;
+    const double sigma_fix_origin_fi = lidar_odometry_motion_model_fix_origin_fi_1_sigma_deg * DEG_TO_RAD;
+    const double sigma_fix_origin_ka = lidar_odometry_motion_model_fix_origin_ka_1_sigma_deg * DEG_TO_RAD;
+    tripletListP.emplace_back(ir + 3, ir + 3, 1.0 / (sigma_fix_origin_om * sigma_fix_origin_om));
+    tripletListP.emplace_back(ir + 4, ir + 4, 1.0 / (sigma_fix_origin_fi * sigma_fix_origin_fi));
+    tripletListP.emplace_back(ir + 5, ir + 5, 1.0 / (sigma_fix_origin_ka * sigma_fix_origin_ka));
 
     tripletListB.emplace_back(ir, 0, 0);
     tripletListB.emplace_back(ir + 1, 0, 0);
@@ -1613,6 +1608,8 @@ bool initialize_lidar_odometry(
         {
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
 
+            ++params.buckets_indoor_revision;
+            ++params.buckets_outdoor_revision;
             update_rgd_hierarchy(
                 params.in_out_params_indoor,
                 params.buckets_indoor,
@@ -1626,6 +1623,7 @@ bool initialize_lidar_odometry(
         {
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
 
+            ++params.buckets_indoor_revision;
             update_rgd(params.in_out_params_indoor, params.buckets_indoor, pp, params.m_g.translation(), &lookup_stats.indoor_lookups);
         }
 
@@ -2248,6 +2246,9 @@ bool process_worker_step_update_rgd_after(
 
         if (params.reference_points.size() == 0)
         {
+            std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
+            ++params.buckets_indoor_revision;
+            ++params.buckets_outdoor_revision;
             params.buckets_indoor.clear();
             params.buckets_outdoor.clear();
         }
@@ -2256,8 +2257,9 @@ bool process_worker_step_update_rgd_after(
         {
             acc_distance = 0;
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
-            // the upstream decimate() below discards its result: the buffer is never decimated, so neither is this
             const Eigen::Vector3d viewport = worker_data.intermediate_trajectory[0].translation();
+            ++params.buckets_indoor_revision;
+            ++params.buckets_outdoor_revision;
             spill->reset(
                 [&](const std::vector<Point3Di>& chunk, bool ray_cast)
                 {
@@ -2288,13 +2290,15 @@ bool process_worker_step_update_rgd_after(
         // decimate
         if (params.decimation > 0)
         {
-            decimate(points_global, params.decimation, params.decimation, params.decimation);
+            points_global = decimate(points_global, params.decimation, params.decimation, params.decimation);
         }
 
         if (params.ablation_study_use_hierarchical_rgd)
         {
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
 
+            ++params.buckets_indoor_revision;
+            ++params.buckets_outdoor_revision;
             update_rgd_hierarchy(
                 params.in_out_params_indoor,
                 params.buckets_indoor,
@@ -2308,6 +2312,7 @@ bool process_worker_step_update_rgd_after(
         {
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
 
+            ++params.buckets_indoor_revision;
             update_rgd(
                 params.in_out_params_indoor,
                 params.buckets_indoor,
@@ -2358,6 +2363,8 @@ bool process_worker_step_update_rgd_after(
                 return true;
             }
 
+            ++params.buckets_indoor_revision;
+            ++params.buckets_outdoor_revision;
             update_rgd_hierarchy(
                 params.in_out_params_indoor,
                 params.buckets_indoor,
@@ -2373,6 +2380,7 @@ bool process_worker_step_update_rgd_after(
         {
             std::scoped_lock lock(params.mutex_buckets_indoor, params.mutex_buckets_outdoor);
 
+            ++params.buckets_indoor_revision;
             update_rgd(
                 params.in_out_params_indoor,
                 params.buckets_indoor,
@@ -2402,11 +2410,17 @@ bool compute_step_2(
     bool debugMsg,
     std::atomic<bool>& parked)
 {
+    RunReport::Scope timing(params.run_report.get(), RunReport::Stage::Odometry);
     try
     {
-        return compute_step_2_impl(worker_data, params, ts_failure, loProgress, pause, debugMsg, parked);
+        const bool success = compute_step_2_impl(worker_data, params, ts_failure, loProgress, pause, debugMsg, parked);
+        if (!success && params.run_report)
+            params.run_report->fail("Odometry failed");
+        return success;
     } catch (const std::runtime_error& e) // a points_global spill I/O failure; its files are already removed
     {
+        if (params.run_report)
+            params.run_report->fail(e.what());
         spdlog::error("{}", e.what());
         return false;
     }
@@ -2438,6 +2452,10 @@ static bool compute_step_2_impl(
     spdlog::stopwatch stopwatch_worker;
     if (initialize_lidar_odometry(worker_data, params, ts_failure, loProgress, pause, debugMsg, lookup_stats))
     {
+        if (params.publish_processing_head && !worker_data.empty() && !worker_data.front().intermediate_trajectory.empty())
+            params.publish_processing_head(worker_data.front().intermediate_trajectory.front().translation());
+        if (params.publish_trajectory)
+            params.publish_trajectory(worker_data, true);
         for (int i = 0; i < worker_data.size(); i++)
         {
             HDMAP_ZONE_BEGIN(before_iter, "before_iterations");
@@ -2451,6 +2469,10 @@ static bool compute_step_2_impl(
 
             if (pause)
             {
+                if (params.publish_trajectory)
+                    params.publish_trajectory(worker_data, true);
+                if (params.run_report)
+                    params.run_report->pause(true);
                 parked.store(true);
                 while (pause)
                 {
@@ -2458,6 +2480,8 @@ static bool compute_step_2_impl(
                     std::this_thread::sleep_for(std::chrono::seconds(1));
                 }
                 parked.store(false);
+                if (params.run_report)
+                    params.run_report->pause(false);
             }
 
             spdlog::stopwatch stopwatch_worker_process_worker_step_1;
@@ -2498,6 +2522,9 @@ static bool compute_step_2_impl(
                 ts_failure,
                 intermediate_points);
             const double elapsed_seconds_process_worker_step_2 = stopwatch_worker_process_worker_step_2.elapsed().count();
+
+            if (params.publish_trajectory)
+                params.publish_trajectory(worker_data, false);
 
             auto tmp_worker_data = worker_data[i].intermediate_trajectory;
 
@@ -2630,6 +2657,9 @@ static bool compute_step_2_impl(
             }
             HDMAP_ZONE_END(propagate_traj);
 
+            if (params.publish_trajectory)
+                params.publish_trajectory(worker_data, false);
+
             HDMAP_ZONE_BEGIN(transform_pts, "transform_points_global");
             for (int j = 0; j < intermediate_points.size(); j++)
             {
@@ -2648,6 +2678,9 @@ static bool compute_step_2_impl(
             process_worker_step_update_rgd_after(acc_distance, params, points_global, worker_data[i], lookup_stats, intermediate_points);
 
             HDMAP_ZONE_END(update_rgd_after);
+
+            if (params.publish_processing_head && !worker_data[i].intermediate_trajectory.empty())
+                params.publish_processing_head(worker_data[i].intermediate_trajectory.back().translation());
 
             if (i > 1)
             {

@@ -16,20 +16,27 @@ namespace raylib_render_shaders
     // pointColor (0, the original app's only mode) and the ScanColorMode
     // gradients (1/2/3), matching the enum's Intensity/Elevation/Distance
     // ordering exactly (see ScanRenderer::draw()'s static_cast below).
+    // model displaces the cached world-space points to the pose actually shown
+    // (identity for a plain draw; a pose delta for drawCachedWithTransform() or
+    // useInitialPose). It is applied before fragWorldPos, not folded into mvp, so
+    // the intersection slab and the Elevation/Distance gradients follow the
+    // displaced points instead of the pose they were cached at.
     inline constexpr const char* kPointVS = R"(
 #version 330
 in vec3 vertexPosition;
 in float vertexIntensity;
 uniform mat4 mvp;
+uniform mat4 model;
 uniform float pointSize;
 out float fragIntensity;
 out vec3 fragWorldPos;
 void main()
 {
-    gl_Position = mvp * vec4(vertexPosition, 1.0);
+    vec4 worldPos = model * vec4(vertexPosition, 1.0);
+    gl_Position = mvp * worldPos;
     gl_PointSize = pointSize;
     fragIntensity = vertexIntensity;
-    fragWorldPos = vertexPosition;
+    fragWorldPos = worldPos.xyz;
 }
 )";
 
@@ -40,6 +47,7 @@ void main()
 #version 330
 uniform vec4 pointColor;
 uniform int colorMode;
+uniform int colormap;
 uniform float elevMin;
 uniform float elevMax;
 uniform vec3 distCenter;
@@ -60,7 +68,7 @@ uniform vec4 clipPlanes[6];
 in float fragIntensity;
 in vec3 fragWorldPos;
 out vec4 finalColor;
-)") + raylib_widgets::kJetColormapGLSL +
+)") + raylib_widgets::kColormapsGLSL +
         R"(
 void main()
 {
@@ -80,17 +88,17 @@ void main()
 
     if (colorMode == 1)
     {
-        finalColor = vec4(jet(fragIntensity), pointColor.a);
+        finalColor = vec4(applyColormap(colormap, fragIntensity), pointColor.a);
     }
     else if (colorMode == 2)
     {
         float range = max(elevMax - elevMin, 1e-6);
-        finalColor = vec4(jet((fragWorldPos.z - elevMin) / range), pointColor.a);
+        finalColor = vec4(applyColormap(colormap, (fragWorldPos.z - elevMin) / range), pointColor.a);
     }
     else if (colorMode == 3)
     {
         float d = length(fragWorldPos - distCenter);
-        finalColor = vec4(jet(d / max(distMax, 1e-6)), pointColor.a);
+        finalColor = vec4(applyColormap(colormap, d / max(distMax, 1e-6)), pointColor.a);
     }
     else if (colorMode == 4)
     {
