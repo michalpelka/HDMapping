@@ -39,18 +39,57 @@ public:
         bool progress_drawn = false; //!< the progress bar has been shown at least once
     };
     IcpAllEdgesRun icp_all_edges_run;
-    //! Last "Calculate ICP uncertainty" result: the edge and the relative pose it was computed for, so it is shown only
-    //! while both are unchanged.
+    //! Last "Calculate ICP uncertainty" result: the edge, relative pose and start offsets it was computed for, so it is
+    //! shown only while they are unchanged.
     struct IcpUncertainty
     {
         int edge = -1;
         TaitBryanPose relative_pose;
+        //! Start offsets (Q_ini) it was computed with.
+        double start_offset_m = std::numeric_limits<double>::quiet_NaN();
+        double start_offset_deg = std::numeric_limits<double>::quiet_NaN();
         TaitBryanPose point_to_point;
         TaitBryanPose point_to_plane;
         IcpResidualStatistics point_to_point_residuals;
         IcpResidualStatistics point_to_plane_residuals;
     };
     IcpUncertainty icp_uncertainty;
+    //! "Calculate ICP spread": its settings and last result, shown only while the edge and the relative pose it was
+    //! computed for are unchanged.
+    struct IcpSpreadGui
+    {
+        int number_of_runs = 20;
+        double start_offset_m = 0.05;
+        double start_offset_deg = 0.5;
+        //! Size of the drawn translation ellipsoids (spread and point-to-plane uncertainty), in standard deviations.
+        double ellipsoid_sigma = 10.0;
+        int edge = -1;
+        TaitBryanPose relative_pose;
+        IcpSpread result;
+    };
+    IcpSpreadGui icp_spread;
+    //! True when edge is the active edge and its relative pose still equals relative_pose.
+    bool is_active_edge_at(int edge, const TaitBryanPose& relative_pose) const
+    {
+        if (edge != index_active_edge || edge < 0 || edge >= static_cast<int>(edges.size()))
+        {
+            return false;
+        }
+        const TaitBryanPose& a = edges[edge].relative_pose_tb;
+        const TaitBryanPose& b = relative_pose;
+        return a.px == b.px && a.py == b.py && a.pz == b.pz && a.om == b.om && a.fi == b.fi && a.ka == b.ka;
+    }
+    //! True when icp_uncertainty was computed for the active edge at its current relative pose and start offsets.
+    bool icp_uncertainty_is_current() const
+    {
+        return is_active_edge_at(icp_uncertainty.edge, icp_uncertainty.relative_pose) &&
+            icp_uncertainty.start_offset_m == icp_spread.start_offset_m && icp_uncertainty.start_offset_deg == icp_spread.start_offset_deg;
+    }
+    //! True when icp_spread.result was computed for the active edge at its current relative pose.
+    bool icp_spread_is_current() const
+    {
+        return is_active_edge_at(icp_spread.edge, icp_spread.relative_pose);
+    }
     //! "Keep initial trajectory curvature": compute_pose_graph_slam() uses the initial poses as the motion model, else the current ones.
     bool keep_initial_trajectory_curvature = true;
 

@@ -25,6 +25,45 @@
 
 #include <common/include/cauchy.h>
 
+namespace
+{
+    constexpr const char* pose_parameter_names[] = { "px", "py", "pz", "om", "fi", "ka" };
+
+    //! Factors from px, py, pz [m] and om, fi, ka [rad] to mm and degrees.
+    Eigen::Matrix<double, 6, 1> to_mm_deg()
+    {
+        return (Eigen::Matrix<double, 6, 1>() << 1000.0, 1000.0, 1000.0, rad2deg(1.0), rad2deg(1.0), rad2deg(1.0)).finished();
+    }
+
+    //! Pose covariance (px, py, pz [m], om, fi, ka [rad]) as a table in mm and degrees, diagonal highlighted.
+    void covariance_table(const char* id, const Eigen::Matrix<double, 6, 6>& covariance_m_rad)
+    {
+        const Eigen::Matrix<double, 6, 1> scale = to_mm_deg();
+        const Eigen::Matrix<double, 6, 6> covariance = scale.asDiagonal() * covariance_m_rad * scale.asDiagonal();
+        if (ImGui::BeginTable(id, 7, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("");
+            for (const char* name : pose_parameter_names)
+                ImGui::TableSetupColumn(name);
+            ImGui::TableHeadersRow();
+            for (int row = 0; row < 6; row++)
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(pose_parameter_names[row]);
+                for (int col = 0; col < 6; col++)
+                {
+                    ImGui::TableNextColumn();
+                    if (row == col)
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::GetColorU32(ImGuiCol_TextSelectedBg));
+                    ImGui::Text("% .9f", covariance(row, col));
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+} // namespace
+
 void ManualPoseGraphLoopClosure::icp_all_edges_step(
     PointClouds& point_clouds_container, int num_edge_extended_before, int num_edge_extended_after)
 {
@@ -337,6 +376,26 @@ void ManualPoseGraphLoopClosure::Gui(
                 ImGui::SameLine();
                 if (ImGui::Button("ICP (0.1)"))
                     run_icp(point_clouds_container, index_active_edge, 0.1, 30, num_edge_extended_before, num_edge_extended_after);
+                ImGui::PushItemWidth(ImGuiNumberWidth);
+                ImGui::InputDouble("start offset [m]##icp_spread", &icp_spread.start_offset_m, 0.0, 0.0, "%.3f");
+                ImGui::SameLine();
+                ImGui::InputDouble("start offset [deg]##icp_spread", &icp_spread.start_offset_deg, 0.0, 0.0, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Initial error of the relative pose, uniform in +- these offsets: the ICP uncertainty's Q_ini and the\n"
+                        "range the ICP spread draws its starting poses from.");
+                ImGui::SameLine();
+                ImGui::InputDouble("ellipsoid size [sigma]##icp_spread", &icp_spread.ellipsoid_sigma, 0.0, 0.0, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "px, py, pz ellipsoids of the active edge, +- this many standard deviations along their axes, around the\n"
+                        "edge's 'index_to' scan origin: magenta = ICP spread (at the mean result), yellow = point-to-plane\n"
+                        "uncertainty (at the current pose).");
+                ImGui::PopItemWidth();
+                icp_spread.start_offset_m = std::max(icp_spread.start_offset_m, 0.0);
+                icp_spread.start_offset_deg = std::max(icp_spread.start_offset_deg, 0.0);
+                icp_spread.ellipsoid_sigma = std::max(icp_spread.ellipsoid_sigma, 0.0);
+
                 char icp_uncertainty_label[128];
                 std::snprintf(
                     icp_uncertainty_label,
@@ -347,6 +406,10 @@ void ManualPoseGraphLoopClosure::Gui(
                 {
                     icp_uncertainty.edge = index_active_edge;
                     icp_uncertainty.relative_pose = edges[index_active_edge].relative_pose_tb;
+                    icp_uncertainty.start_offset_m = icp_spread.start_offset_m;
+                    icp_uncertainty.start_offset_deg = icp_spread.start_offset_deg;
+                    const Eigen::Matrix<double, 6, 6> initial_covariance =
+                        uniform_pose_offset_covariance(icp_spread.start_offset_m, deg2rad(icp_spread.start_offset_deg));
                     icp_uncertainty.point_to_point = compute_icp_uncertainty(
                         point_clouds_container,
                         index_active_edge,
@@ -354,6 +417,7 @@ void ManualPoseGraphLoopClosure::Gui(
                         num_edge_extended_before,
                         num_edge_extended_after,
                         false,
+                        initial_covariance,
                         &icp_uncertainty.point_to_point_residuals);
                     icp_uncertainty.point_to_plane = compute_icp_uncertainty(
                         point_clouds_container,
@@ -362,44 +426,126 @@ void ManualPoseGraphLoopClosure::Gui(
                         num_edge_extended_before,
                         num_edge_extended_after,
                         true,
+                        initial_covariance,
                         &icp_uncertainty.point_to_plane_residuals);
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip(
-                        "Standard deviations of the active edge's relative pose from the ICP normal matrix at the current pose,\n"
-                        "with Search_radius. Formal values: neighbouring LiDAR points are correlated, so they are optimistic.\n"
-                        "Use them to compare edges, not as absolute accuracy. inf = geometry does not constrain the pose.");
+                        "Uncertainty of the active edge's relative pose left after one damped Gauss-Newton ICP step from an initial\n"
+                        "error uniform in +- the start offsets: (I - J) Q_ini (I - J)^T, J = (A^T A + %g I)^-1 A^T A, where A is\n"
+                        "the ICP Jacobian at the current pose with Search_radius. A direction the geometry does not constrain keeps\n"
+                        "its start-offset sigma.",
+                        PairWiseICP::uncertainty_damping);
 
-                const TaitBryanPose& current_pose = edges[index_active_edge].relative_pose_tb;
-                const TaitBryanPose& computed_pose = icp_uncertainty.relative_pose;
-                if (icp_uncertainty.edge == index_active_edge && current_pose.px == computed_pose.px &&
-                    current_pose.py == computed_pose.py && current_pose.pz == computed_pose.pz && current_pose.om == computed_pose.om &&
-                    current_pose.fi == computed_pose.fi && current_pose.ka == computed_pose.ka)
+                if (icp_uncertainty_is_current())
                 {
                     const auto show = [](const char* label, const TaitBryanPose& s, const IcpResidualStatistics& r)
                     {
-                        ImGui::Text(
-                            "%s sigma [m]: sigma_px %.4f sigma_py %.4f sigma_pz %.4f  [deg]: sigma_om %.4f sigma_fi %.4f sigma_ka %.4f",
-                            label,
-                            s.px,
-                            s.py,
-                            s.pz,
-                            rad2deg(s.om),
-                            rad2deg(s.fi),
-                            rad2deg(s.ka));
-                        ImGui::Text(
-                            "    sum of squared residuals %.6f [m^2], correspondences %d, observations %d, sigma0(RMS) %.4f [m]",
-                            r.sum_squared_residuals,
-                            r.number_of_correspondences,
-                            r.number_of_observations,
-                            r.sigma0);
+                        ImGui::PushID(label);
+                        if (ImGui::BeginTable("residuals", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit))
+                        {
+                            ImGui::TableSetupColumn("");
+                            ImGui::TableSetupColumn("sum of squared residuals [m^2]");
+                            ImGui::TableSetupColumn("correspondences");
+                            ImGui::TableSetupColumn("observations");
+                            ImGui::TableSetupColumn("sigma0 (RMS) [m]");
+                            ImGui::TableHeadersRow();
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::TextUnformatted(label);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.6f", r.sum_squared_residuals);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%d", r.number_of_correspondences);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%d", r.number_of_observations);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.4f", r.sigma0);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(
+                                    "sigma0 = sqrt(sum of squared residuals / (observations - 6)): RMS residual per observation.");
+                            ImGui::EndTable();
+                        }
+
+                        ImGui::Text("    covariance [mm^2, mm*deg, deg^2]:");
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip(
-                                "sigma0 = sqrt(sum of squared residuals / (observations - 6)): RMS residual per observation.\n"
-                                "It scales all pose sigmas: covariance = sigma0^2 * (J^T J)^-1.");
+                                "covariance = (I - J) Q_ini (I - J)^T of px, py, pz [mm] and om, fi, ka [deg].\n"
+                                "The highlighted diagonal holds the variances (sigma^2).\n"
+                                "nan = not computed (too few correspondences).");
+                        covariance_table("covariance", r.covariance);
+                        ImGui::PopID();
                     };
                     show("point-to-point", icp_uncertainty.point_to_point, icp_uncertainty.point_to_point_residuals);
                     show("point-to-plane", icp_uncertainty.point_to_plane, icp_uncertainty.point_to_plane_residuals);
+                }
+
+                ImGui::PushItemWidth(ImGuiNumberWidth);
+                ImGui::InputInt("runs##icp_spread", &icp_spread.number_of_runs);
+                ImGui::PopItemWidth();
+                icp_spread.number_of_runs = std::max(icp_spread.number_of_runs, 2);
+                ImGui::SameLine();
+
+                char icp_spread_label[128];
+                std::snprintf(
+                    icp_spread_label,
+                    sizeof(icp_spread_label),
+                    "Calculate ICP spread for search radius %.3f m###icp_spread",
+                    search_radious);
+                if (ImGui::Button(icp_spread_label))
+                {
+                    icp_spread.edge = index_active_edge;
+                    icp_spread.relative_pose = edges[index_active_edge].relative_pose_tb;
+                    icp_spread.result = compute_icp_spread(
+                        point_clouds_container,
+                        index_active_edge,
+                        search_radious,
+                        30,
+                        num_edge_extended_before,
+                        num_edge_extended_after,
+                        icp_spread.number_of_runs,
+                        icp_spread.start_offset_m,
+                        deg2rad(icp_spread.start_offset_deg));
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Runs the edge's ICP (30 iterations) 'runs' times, each from the current relative pose plus a random offset\n"
+                        "up to the start offsets, and shows the spread of the results. The edge is left unchanged.\n"
+                        "result/start near 1: ICP does not pull that parameter back, the geometry does not constrain it.\n"
+                        "result/start near 0: ICP returns to the same value; result sigma is its repeatability.");
+
+                if (icp_spread_is_current())
+                {
+                    const IcpSpread& spread = icp_spread.result;
+                    ImGui::Text("ICP spread: %d of %d runs converged", spread.number_of_converged_runs, spread.number_of_runs);
+                    const Eigen::Matrix<double, 6, 1> scale = to_mm_deg();
+                    if (ImGui::BeginTable("icp_spread", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit))
+                    {
+                        ImGui::TableSetupColumn("[mm, deg]");
+                        ImGui::TableSetupColumn("start sigma");
+                        ImGui::TableSetupColumn("result sigma");
+                        ImGui::TableSetupColumn("result / start");
+                        ImGui::TableSetupColumn("mean result - current");
+                        ImGui::TableHeadersRow();
+                        for (int i = 0; i < 6; i++)
+                        {
+                            const double result_sigma = std::sqrt(spread.covariance(i, i));
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::TextUnformatted(pose_parameter_names[i]);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.4f", spread.start_sigma(i) * scale(i));
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.4f", result_sigma * scale(i));
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.2f", result_sigma / spread.start_sigma(i));
+                            ImGui::TableNextColumn();
+                            ImGui::Text("% .4f", spread.mean_offset(i) * scale(i));
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::Text("    covariance of the results [mm^2, mm*deg, deg^2]:");
+                    covariance_table("icp_spread_covariance", spread.covariance);
                 }
 
                 if (ImGui::Button("Save source (local)"))

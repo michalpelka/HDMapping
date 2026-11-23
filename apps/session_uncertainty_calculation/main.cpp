@@ -90,6 +90,9 @@ int main(int argc, char* argv[])
         target_global.emplace_back(p.point);
     }
 
+    // Initial pose error of each node, uniform in +-0.05 m and +-0.5 deg (step 2's default start offsets).
+    const Eigen::Matrix<double, 6, 6> initial_covariance = uniform_pose_offset_covariance(0.05, 0.5 * M_PI / 180.0);
+
     std::vector<TaitBryanPose> icp_uncertainties;
     std::vector<IcpResidualStatistics> icp_residuals;
     std::vector<std::pair<double, double>> node_timestamps; // <lidar_timestamp, unix_timestamp>
@@ -143,8 +146,8 @@ int main(int argc, char* argv[])
 
             PairWiseICP icp;
             IcpResidualStatistics residuals;
-            TaitBryanPose icp_uncertainty =
-                icp.compute_icp_uncertainty(source_local_for_single_trajectory_node, target_global, m_global, 0.3, &residuals);
+            TaitBryanPose icp_uncertainty = icp.compute_icp_uncertainty(
+                source_local_for_single_trajectory_node, target_global, m_global, 0.3, initial_covariance, &residuals);
             // icp.compute_icp_uncertainty_point_to_plane(source_local_for_single_trajectory_node, target_global, m_global, 0.3);
             std::cout << "sigma_px=" << icp_uncertainty.px << ", "
                       << "sigma_py=" << icp_uncertainty.py << ", "
@@ -169,7 +172,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Standard deviations: sigma_px/py/pz in metres, sigma_om/fi/ka in radians (inf = pose not constrained).
+    // Standard deviations: sigma_px/py/pz in metres, sigma_om/fi/ka in radians, left of the initial error after an ICP step.
     // Residuals: sum_squared_residuals in m^2, sigma0 = sqrt(sum_squared_residuals / (observations - 6)) in metres.
     csv << "timestamp_lidar,timestamp_unix,x,y,z,sigma_px,sigma_py,sigma_pz,sigma_om,sigma_fi,sigma_ka,"
            "sum_squared_residuals,number_of_correspondences,number_of_observations,sigma0(RMS)\n";

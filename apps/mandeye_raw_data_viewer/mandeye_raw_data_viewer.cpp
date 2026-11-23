@@ -96,8 +96,16 @@ ImuData imu_data_plot;
 std::vector<std::string> laz_files;
 //! Time span of every LAZ and IMU file load_data read, drawn as lanes under the playback timeline.
 InputFileSpans file_spans;
-//! [start, end] LiDAR-clock times [s] of the stretches VQF detected the IMU at rest.
-std::vector<std::pair<double, double>> motionless_segments;
+//! A stretch VQF detected the IMU at rest.
+struct MotionlessSegment
+{
+    double from = 0.0; //!< LiDAR-clock start [s]
+    double to = 0.0; //!< LiDAR-clock end [s]
+    Eigen::Vector3d gyro_bias = Eigen::Vector3d::Zero(); //!< mean of the raw gyro samples [rad/s]
+    Eigen::Vector3d gyro_std = Eigen::Vector3d::Zero(); //!< standard deviation of the raw gyro samples [rad/s]
+};
+//! Motionless segments in time order, disjoint.
+std::vector<MotionlessSegment> motionless_segments;
 bool show_file_lanes = true;
 std::vector<std::string> photos_files;
 std::map<uint64_t, std::string> photo_files_ts;
@@ -1196,10 +1204,10 @@ void loadFiles(std::vector<std::string> input_file_names)
             {
                 rest_start = timestamp_pair.first - vqf_params.restMinT;
                 if (!motionless_segments.empty())
-                    rest_start = std::max(rest_start, motionless_segments.back().second);
+                    rest_start = std::max(rest_start, motionless_segments.back().to);
             }
             else if (!rest && resting)
-                motionless_segments.emplace_back(rest_start, previous_t);
+                motionless_segments.push_back({ rest_start, previous_t });
             resting = rest;
             previous_t = timestamp_pair.first;
 
@@ -1232,8 +1240,51 @@ void loadFiles(std::vector<std::string> input_file_names)
         }
 
         if (resting)
-            motionless_segments.emplace_back(rest_start, previous_t);
+            motionless_segments.push_back({ rest_start, previous_t });
         spdlog::info("{} motionless segment(s) detected", motionless_segments.size());
+
+        // The IMU is at rest in a segment, so the mean of its raw gyro samples there is the gyro bias.
+        for (size_t s = 0; s < motionless_segments.size(); s++)
+        {
+            MotionlessSegment& segment = motionless_segments[s];
+            Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+            Eigen::Vector3d sum_sq = Eigen::Vector3d::Zero();
+            size_t n = 0;
+            auto it = std::lower_bound(
+                imu_data.begin(),
+                imu_data.end(),
+                segment.from,
+                [](const auto& sample, double t)
+                {
+                    return std::get<0>(sample).first < t;
+                });
+            for (; it != imu_data.end() && std::get<0>(*it).first <= segment.to; ++it)
+            {
+                const Eigen::Vector3d gyr = std::get<1>(*it).cast<double>();
+                sum += gyr;
+                sum_sq += gyr.cwiseProduct(gyr);
+                n++;
+            }
+            if (n == 0)
+                continue;
+            segment.gyro_bias = sum / static_cast<double>(n);
+            const Eigen::Vector3d variance = sum_sq / static_cast<double>(n) - segment.gyro_bias.cwiseProduct(segment.gyro_bias);
+            segment.gyro_std = variance.cwiseMax(0.0).cwiseSqrt();
+
+            const Eigen::Vector3d bias_deg = segment.gyro_bias * (180.0 / M_PI);
+            const Eigen::Vector3d std_deg = segment.gyro_std * (180.0 / M_PI);
+            spdlog::info(
+                "motionless segment {} ({:.1f} s, {} samples): gyro bias {:.4f} {:.4f} {:.4f} deg/s, std {:.3f} {:.3f} {:.3f} deg/s",
+                s,
+                segment.to - segment.from,
+                n,
+                bias_deg.x(),
+                bias_deg.y(),
+                bias_deg.z(),
+                std_deg.x(),
+                std_deg.y(),
+                std_deg.z());
+        }
 
         // timeline x-axis is shown relative to the first IMU sample so it starts at 0 [s];
         // datasetStart keeps the absolute value for reference / annotations
@@ -1708,9 +1759,16 @@ static void playbackBar()
     std::vector<raylib_widgets::TimelineLane> lanes;
     if (duration > 0.0)
     {
-        for (const auto& [from, to] : motionless_segments)
-            if (pos(to) >= 0.f && pos(from) <= 1.f)
-                spans.push_back({ pos(from), pos(to), IM_COL32(80, 200, 120, 110), "motionless" });
+        for (const MotionlessSegment& segment : motionless_segments)
+        {
+            if (pos(segment.to) < 0.f || pos(segment.from) > 1.f)
+                continue;
+            const Eigen::Vector3d bias_deg = segment.gyro_bias * (180.0 / M_PI);
+            std::ostringstream label;
+            label << std::fixed << std::setprecision(1) << "motionless " << segment.to - segment.from << " s\n"
+                  << std::setprecision(4) << "gyro bias [deg/s]: " << bias_deg.x() << ", " << bias_deg.y() << ", " << bias_deg.z();
+            spans.push_back({ pos(segment.from), pos(segment.to), IM_COL32(80, 200, 120, 110), label.str() });
+        }
 
         if (show_file_lanes)
         {
@@ -1825,14 +1883,14 @@ static void saveMotionlessSegments(const fs::path& folder)
                 motionless_segments.begin(),
                 motionless_segments.end(),
                 p.timestamp,
-                [](double t, const std::pair<double, double>& segment)
+                [](double t, const MotionlessSegment& segment)
                 {
-                    return t < segment.first;
+                    return t < segment.from;
                 });
             if (next == motionless_segments.begin())
                 continue;
             const size_t s = static_cast<size_t>(std::distance(motionless_segments.begin(), next)) - 1;
-            if (p.timestamp > motionless_segments[s].second)
+            if (p.timestamp > motionless_segments[s].to)
                 continue;
             points[s].push_back(p.point);
             intensities[s].push_back(static_cast<unsigned short>(p.intensity));
@@ -1842,7 +1900,7 @@ static void saveMotionlessSegments(const fs::path& folder)
 
     for (size_t s = 0; s < motionless_segments.size(); s++)
     {
-        const auto [from, to] = motionless_segments[s];
+        const MotionlessSegment& segment = motionless_segments[s];
         std::ostringstream name;
         name << "motionless_" << std::setw(3) << std::setfill('0') << s << ".laz";
         const fs::path file = folder / name.str();
@@ -1853,7 +1911,8 @@ static void saveMotionlessSegments(const fs::path& folder)
         }
         const double origin = chunkStartSec(0);
         if (exportLaz(file.string(), points[s], intensities[s], timestamps[s]))
-            spdlog::info("saved '{}': {:.3f} .. {:.3f} s, {} points", file.string(), from - origin, to - origin, points[s].size());
+            spdlog::info(
+                "saved '{}': {:.3f} .. {:.3f} s, {} points", file.string(), segment.from - origin, segment.to - origin, points[s].size());
         else
             spdlog::error("problem with saving file: '{}'", file.string());
     }

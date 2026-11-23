@@ -16,6 +16,9 @@
 #include <python-scripts/point-to-feature-metrics/point_to_plane_tait_bryan_wc_jacobian.h>
 #include <python-scripts/point-to-point-metrics/point_to_point_source_to_target_tait_bryan_wc_jacobian.h>
 
+#include <cmath>
+#include <random>
+
 void PoseGraphLoopClosure::add_edge(PointClouds& point_clouds_container, int index_loop_closure_source, int index_loop_closure_target)
 {
     Edge edge;
@@ -1323,6 +1326,7 @@ TaitBryanPose PoseGraphLoopClosure::compute_icp_uncertainty(
     int num_edge_extended_before,
     int num_edge_extended_after,
     bool point_to_plane,
+    const Eigen::Matrix<double, 6, 6>& initial_covariance,
     IcpResidualStatistics* statistics)
 {
     const auto m_pose = affine_matrix_from_pose_tait_bryan(edges[index_active_edge].relative_pose_tb);
@@ -1331,8 +1335,106 @@ TaitBryanPose PoseGraphLoopClosure::compute_icp_uncertainty(
     edge_source_target(point_clouds_container, edges[index_active_edge], num_edge_extended_before, num_edge_extended_after, source, target);
 
     PairWiseICP icp;
-    return point_to_plane ? icp.compute_icp_uncertainty_point_to_plane(source, target, m_pose, search_radius, statistics)
-                          : icp.compute_icp_uncertainty(source, target, m_pose, search_radius, statistics);
+    return point_to_plane
+        ? icp.compute_icp_uncertainty_point_to_plane(source, target, m_pose, search_radius, initial_covariance, statistics)
+        : icp.compute_icp_uncertainty(source, target, m_pose, search_radius, initial_covariance, statistics);
+}
+
+PoseGraphLoopClosure::IcpSpread PoseGraphLoopClosure::compute_icp_spread(
+    const PointClouds& point_clouds_container,
+    int index_active_edge,
+    double search_radius,
+    int number_of_iterations,
+    int num_edge_extended_before,
+    int num_edge_extended_after,
+    int number_of_runs,
+    double start_offset_m,
+    double start_offset_rad) const
+{
+    using Vector6d = Eigen::Matrix<double, 6, 1>;
+    using Matrix6d = Eigen::Matrix<double, 6, 6>;
+
+    std::vector<Eigen::Vector3d> source;
+    std::vector<Eigen::Vector3d> target;
+    edge_source_target(point_clouds_container, edges[index_active_edge], num_edge_extended_before, num_edge_extended_after, source, target);
+
+    const auto to_vector = [](const TaitBryanPose& p)
+    {
+        return (Vector6d() << p.px, p.py, p.pz, p.om, p.fi, p.ka).finished();
+    };
+    const Vector6d current = to_vector(edges[index_active_edge].relative_pose_tb);
+
+    // std::mt19937's output is fixed by the standard (unlike std::uniform_real_distribution's), so every platform
+    // draws the same offsets.
+    std::mt19937 generator(0);
+    const auto uniform = [&generator](double half_width)
+    {
+        return half_width * (2.0 * static_cast<double>(generator()) / static_cast<double>(std::mt19937::max()) - 1.0);
+    };
+
+    std::vector<Vector6d> start_offsets;
+    std::vector<Vector6d> result_offsets;
+    PairWiseICP icp;
+    for (int run = 0; run < number_of_runs; run++)
+    {
+        Vector6d start_offset;
+        for (int i = 0; i < 6; i++)
+        {
+            start_offset(i) = uniform(i < 3 ? start_offset_m : start_offset_rad);
+        }
+        start_offsets.push_back(start_offset);
+
+        const Vector6d start = current + start_offset;
+        const TaitBryanPose start_pose{ start(0), start(1), start(2), start(3), start(4), start(5) };
+        Eigen::Affine3d m_pose = affine_matrix_from_pose_tait_bryan(start_pose);
+        if (icp.compute(source, target, search_radius, number_of_iterations, m_pose))
+        {
+            Vector6d offset = to_vector(pose_tait_bryan_from_affine_matrix(m_pose)) - current;
+            for (int i = 3; i < 6; i++)
+            {
+                offset(i) = std::remainder(offset(i), 2.0 * M_PI); // angle difference in [-pi, pi]
+            }
+            result_offsets.push_back(offset);
+        }
+    }
+
+    const auto mean_of = [](const std::vector<Vector6d>& samples)
+    {
+        Vector6d sum = Vector6d::Zero();
+        for (const auto& s : samples)
+        {
+            sum += s;
+        }
+        return Vector6d(sum / static_cast<double>(samples.size()));
+    };
+    const auto covariance_of = [&mean_of](const std::vector<Vector6d>& samples)
+    {
+        const Vector6d mean = mean_of(samples);
+        Matrix6d sum = Matrix6d::Zero();
+        for (const auto& s : samples)
+        {
+            sum += (s - mean) * (s - mean).transpose();
+        }
+        return Matrix6d(sum / static_cast<double>(samples.size() - 1));
+    };
+
+    IcpSpread spread;
+    spread.number_of_runs = number_of_runs;
+    spread.number_of_converged_runs = static_cast<int>(result_offsets.size());
+    if (start_offsets.size() >= 2)
+    {
+        spread.start_sigma = covariance_of(start_offsets).diagonal().cwiseSqrt();
+    }
+    if (!result_offsets.empty())
+    {
+        spread.mean_offset = mean_of(result_offsets);
+    }
+    if (result_offsets.size() >= 2)
+    {
+        spread.covariance = covariance_of(result_offsets);
+    }
+    std::cout << "ICP spread: " << spread.number_of_converged_runs << " of " << number_of_runs << " runs converged" << std::endl;
+    return spread;
 }
 
 std::vector<float> PoseGraphLoopClosure::icp_search_radii(float start_radius)

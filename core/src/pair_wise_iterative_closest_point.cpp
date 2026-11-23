@@ -363,10 +363,8 @@ namespace
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> buckets;
     };
 
-    //! Standard deviations of the pose parameters (px, py, pz in metres; om, fi, ka in radians) from the normal matrix
-    //! AtPA = J^T J (unit weights). Covariance = sigma0^2 * AtPA^-1, where the variance factor
-    //! sigma0^2 = sum of squared residuals / (number_of_observations - 6). Returns infinity for every parameter
-    //! when the problem is degenerate (e.g. a corridor or a plane leaves a direction unconstrained).
+    //! Writes the residual statistics (sigma0 = sqrt(sum of squared residuals / (number_of_observations - 6))) and
+    //! resets the covariance to NaN.
     void fill_residual_statistics(
         IcpResidualStatistics* statistics, double sum_squared_residuals, int number_of_correspondences, int number_of_observations)
     {
@@ -379,37 +377,43 @@ namespace
         statistics->number_of_observations = number_of_observations;
         statistics->sigma0 = number_of_observations > 6 ? std::sqrt(sum_squared_residuals / (number_of_observations - 6))
                                                         : std::numeric_limits<double>::quiet_NaN();
+        // Set by compute_icp_uncertainty_from_hessian().
+        statistics->covariance.setConstant(std::numeric_limits<double>::quiet_NaN());
     }
 
+    //! Standard deviations of the pose parameters (px, py, pz in metres; om, fi, ka in radians) left after one damped
+    //! Gauss-Newton step from an initial pose error e with covariance Q_ini.
+    //!
+    //! A is the observation Jacobian (one row per residual, one column per pose parameter) and AtPA = A^T A its normal
+    //! matrix (unit weights, P = I). The step changes the pose by -(AtPA + mu I)^-1 AtPA e = -J e, which leaves the
+    //! error (I - J) e, so covariance = (I - J) Q_ini (I - J)^T. J is 6 x 6: the fraction of the initial error the step
+    //! removes. mu = PairWiseICP::uncertainty_damping.
+    //!
+    //! Along an eigenvector of AtPA with eigenvalue lambda, I - J keeps mu / (lambda + mu) of the error: a direction the
+    //! geometry constrains (lambda >> mu) is corrected, one it does not constrain (lambda << mu) keeps its initial
+    //! uncertainty.
     TaitBryanPose compute_icp_uncertainty_from_hessian(
-        const Eigen::Matrix<double, 6, 6>& AtPA, int number_of_observations, double sum_squared_residuals)
+        const Eigen::Matrix<double, 6, 6>& AtPA, const Eigen::Matrix<double, 6, 6>& initial_covariance, IcpResidualStatistics* statistics)
     {
-        TaitBryanPose sigma = infinite_uncertainty();
-
-        // The pose has 6 unknowns.
-        const int redundancy = number_of_observations - 6;
-        if (redundancy <= 0)
-        {
-            return sigma;
-        }
-
-        // AtPA is symmetric positive semi-definite; the eigen decomposition exposes unconstrained directions.
+        // AtPA is symmetric positive semi-definite: AtPA = V diag(lambda) V^T, so I - J = V diag(mu / (lambda + mu)) V^T.
         const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eigen_solver(AtPA);
         if (eigen_solver.info() != Eigen::Success)
         {
-            return sigma;
+            return infinite_uncertainty();
         }
-        const Eigen::Matrix<double, 6, 1>& eigenvalues = eigen_solver.eigenvalues(); // ascending
-        if (eigenvalues(0) <= 1e-12 * eigenvalues(5))
-        {
-            std::cout << "compute_icp_uncertainty_from_hessian: degenerate geometry, pose not fully constrained" << std::endl;
-            return sigma;
-        }
-
-        const double sigma0_squared = sum_squared_residuals / redundancy;
+        const Eigen::Matrix<double, 6, 1> lambda = eigen_solver.eigenvalues().cwiseMax(0.0);
+        constexpr double mu = PairWiseICP::uncertainty_damping;
+        const Eigen::Matrix<double, 6, 1> remaining = (mu / (lambda.array() + mu)).matrix();
         const Eigen::Matrix<double, 6, 6>& V = eigen_solver.eigenvectors();
-        const Eigen::Matrix<double, 6, 6> covariance = sigma0_squared * V * eigenvalues.cwiseInverse().asDiagonal() * V.transpose();
+        const Eigen::Matrix<double, 6, 6> i_minus_j = V * remaining.asDiagonal() * V.transpose();
+        const Eigen::Matrix<double, 6, 6> covariance = i_minus_j * initial_covariance * i_minus_j.transpose();
 
+        if (statistics != nullptr)
+        {
+            statistics->covariance = covariance;
+        }
+
+        TaitBryanPose sigma;
         sigma.px = std::sqrt(covariance(0, 0));
         sigma.py = std::sqrt(covariance(1, 1));
         sigma.pz = std::sqrt(covariance(2, 2));
@@ -425,6 +429,7 @@ TaitBryanPose PairWiseICP::compute_icp_uncertainty(
     const std::vector<Eigen::Vector3d>& target,
     const Eigen::Affine3d& m_pose_result,
     double search_radious,
+    const Eigen::Matrix<double, 6, 6>& initial_covariance,
     IcpResidualStatistics* statistics)
 {
     bool multithread = true;
@@ -622,29 +627,7 @@ TaitBryanPose PairWiseICP::compute_icp_uncertainty(
         return icp_uncertainty;
     }
 
-    /*
-    Added compute_icp_uncertainty_from_hessian to pair_wise_iterative_closest_point.cpp.
-
-    How it works:
-
-    Covariance: it computes covariance = σ₀² · (AᵀPA)⁻¹ and returns the square root of each diagonal entry as a TaitBryanPose. px/py/pz are
-    in metres and om/fi/ka in radians. Scale factor: σ₀² = sum of squared residuals / (3·n − 6). Each match gives 3 observations and the
-    pose has 6 unknowns. Matrix inverse: it inverts through an eigen decomposition, which shows when the geometry leaves a direction
-    unconstrained (a plane, a corridor). If the smallest eigenvalue is below 1e-12 of the largest, it prints a warning and returns infinity
-    for every parameter. Other changes:
-
-    Extra parameter: the Hessian only gives the shape of the uncertainty, not its size, so the function needs the residuals too. The call is
-    now compute_icp_uncertainty_from_hessian(AtPA, counter_nn, sum_squared_residuals). Residual sum: NormalEquations gets a
-    sum_squared_residuals field. Each match adds its min_dist_squared, and the block sums are added up alongside AtPA. Includes: added
-    <cmath> and <limits>. Things to check:
-
-    Wasted work: hessian_fun still calls point_to_point_source_to_target_tait_bryan_wc_AtPB_simplified for every point and never uses the
-    result. You can delete that call. Over-confident result: neighbouring LiDAR points are correlated, so this formal covariance tends to
-    make the uncertainty look smaller than it really is. It's fine for comparing edges with each other, but don't read it as an absolute
-    error.
-    */
-    // Each point-to-point correspondence gives 3 observations (x, y, z).
-    icp_uncertainty = compute_icp_uncertainty_from_hessian(AtPA, 3 * counter_nn, sum_squared_residuals);
+    icp_uncertainty = compute_icp_uncertainty_from_hessian(AtPA, initial_covariance, statistics);
 
     return icp_uncertainty;
 }
@@ -654,6 +637,7 @@ TaitBryanPose PairWiseICP::compute_icp_uncertainty_point_to_plane(
     const std::vector<Eigen::Vector3d>& target,
     const Eigen::Affine3d& m_pose_result,
     double search_radious,
+    const Eigen::Matrix<double, 6, 6>& initial_covariance,
     IcpResidualStatistics* statistics)
 {
     // A target neighbourhood is used as a plane only if it has enough points and is flat: smallest eigenvalue of
@@ -778,5 +762,5 @@ TaitBryanPose PairWiseICP::compute_icp_uncertainty_point_to_plane(
     }
 
     // Each point-to-plane correspondence gives 1 observation (distance along the normal).
-    return compute_icp_uncertainty_from_hessian(AtPA, counter, sum_squared_residuals);
+    return compute_icp_uncertainty_from_hessian(AtPA, initial_covariance, statistics);
 }

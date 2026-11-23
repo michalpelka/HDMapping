@@ -32,6 +32,20 @@ public:
         EdgeType type;
     };
 
+    //! Spread of an edge's ICP result over runs started from randomly perturbed relative poses. Parameters are in the
+    //! order px, py, pz [m], om, fi, ka [rad].
+    struct IcpSpread
+    {
+        int number_of_runs = 0;
+        int number_of_converged_runs = 0; //!< runs where PairWiseICP::compute() succeeded
+        //! Sample standard deviations of the starting offsets from the current relative pose.
+        Eigen::Matrix<double, 6, 1> start_sigma = Eigen::Matrix<double, 6, 1>::Constant(std::numeric_limits<double>::quiet_NaN());
+        //! Mean converged relative pose minus the current one.
+        Eigen::Matrix<double, 6, 1> mean_offset = Eigen::Matrix<double, 6, 1>::Constant(std::numeric_limits<double>::quiet_NaN());
+        //! Sample covariance of the converged relative poses; NaN with fewer than 2 converged runs.
+        Eigen::Matrix<double, 6, 6> covariance = Eigen::Matrix<double, 6, 6>::Constant(std::numeric_limits<double>::quiet_NaN());
+    };
+
     std::vector<Edge> edges;
     std::vector<Eigen::Affine3d> poses_motion_model;
 
@@ -76,11 +90,11 @@ public:
         int number_of_iterations,
         int num_edge_extended_before,
         int num_edge_extended_after);
-    //! Standard deviations of one edge's relative pose (px, py, pz in metres; om, fi, ka in radians) from the ICP
-    //! normal matrix at the current relative pose, on the same clouds as run_icp().
+    //! Standard deviations of one edge's relative pose (px, py, pz in metres; om, fi, ka in radians) left after an ICP
+    //! step from an initial error with covariance initial_covariance, from the ICP normal matrix at the current
+    //! relative pose, on the same clouds as run_icp(). See PairWiseICP::compute_icp_uncertainty().
     //! @param point_to_plane false: point-to-point residuals (as run_icp() minimises); true: point-to-plane residuals
-    //! @param statistics if given, receives the residual statistics (sum of squared residuals, sigma0, ...)
-    //! @return infinity for every parameter when the geometry does not constrain the pose
+    //! @param statistics if given, receives the residual statistics (sum of squared residuals, sigma0, ...) and the covariance
     TaitBryanPose compute_icp_uncertainty(
         const PointClouds& point_clouds_container,
         int index_active_edge,
@@ -88,7 +102,22 @@ public:
         int num_edge_extended_before,
         int num_edge_extended_after,
         bool point_to_plane,
+        const Eigen::Matrix<double, 6, 6>& initial_covariance,
         IcpResidualStatistics* statistics = nullptr);
+    //! Runs run_icp()'s ICP number_of_runs times from the current relative pose plus a random offset, uniform in
+    //! [-start_offset_m, start_offset_m] on px, py, pz and [-start_offset_rad, start_offset_rad] on om, fi, ka, and
+    //! returns the spread of the results. The edge is left unchanged. The offsets come from a fixed seed, so the
+    //! result is repeatable.
+    IcpSpread compute_icp_spread(
+        const PointClouds& point_clouds_container,
+        int index_active_edge,
+        double search_radius,
+        int number_of_iterations,
+        int num_edge_extended_before,
+        int num_edge_extended_after,
+        int number_of_runs,
+        double start_offset_m,
+        double start_offset_rad) const;
     //! Search radii for coarse-to-fine ICP: `start_radius`, then those of the per-edge ICP buttons' steps (2.0, 1.0,
     //! 0.5, 0.25, 0.1 m) below it.
     static std::vector<float> icp_search_radii(float start_radius);
