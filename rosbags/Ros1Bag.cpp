@@ -1,9 +1,7 @@
 #include "Ros1Bag.h"
 
-#if !defined(MCAP_COMPRESSION_NO_LZ4) // same switch as the mcap target: no compression libraries on Windows
 #include <bzlib.h>
 #include <lz4frame.h>
-#endif
 
 #include <algorithm>
 #include <cstring>
@@ -261,7 +259,6 @@ bool decompress(const std::string& compression, const std::vector<uint8_t>& in, 
 		out = in;
 		return true;
 	}
-#if !defined(MCAP_COMPRESSION_NO_LZ4)
 	if(compression == "bz2")
 	{
 		unsigned int dst = static_cast<unsigned int>(out_size);
@@ -306,7 +303,6 @@ bool decompress(const std::string& compression, const std::vector<uint8_t>& in, 
 		}
 		return true;
 	}
-#endif
 	error = "unsupported chunk compression '" + compression + "'";
 	return false;
 }

@@ -326,14 +326,46 @@ add_subdirectory(${EXTERNAL_LIBRARIES_DIRECTORY}/WGS84toCartesian)
 message(STATUS "Using external library: WGS84toCartesian")
 
 
+# Compression libraries of the bag readers: LZ4 and Zstandard for mcap (MCAP chunks), bzip2 and LZ4 for
+# rosbags/Ros1Bag (ROS1 bag chunks). Linux and macOS use the system packages (apt, Homebrew). Windows has no package
+# manager for them, so they are built here as static libraries from the 3rdparty submodules.
+if(WIN32)
+    add_library(lz4_static STATIC
+        ${THIRDPARTY_DIRECTORY}/lz4/lib/lz4.c
+        ${THIRDPARTY_DIRECTORY}/lz4/lib/lz4hc.c
+        ${THIRDPARTY_DIRECTORY}/lz4/lib/lz4frame.c
+        ${THIRDPARTY_DIRECTORY}/lz4/lib/xxhash.c)
+    target_include_directories(lz4_static PUBLIC ${THIRDPARTY_DIRECTORY}/lz4/lib)
+
+    file(GLOB ZSTD_SOURCES
+        ${THIRDPARTY_DIRECTORY}/zstd/lib/common/*.c
+        ${THIRDPARTY_DIRECTORY}/zstd/lib/compress/*.c
+        ${THIRDPARTY_DIRECTORY}/zstd/lib/decompress/*.c)
+    add_library(zstd_static STATIC ${ZSTD_SOURCES})
+    target_include_directories(zstd_static PUBLIC ${THIRDPARTY_DIRECTORY}/zstd/lib)
+    target_compile_definitions(zstd_static PRIVATE ZSTD_DISABLE_ASM)
+
+    add_library(bz2_static STATIC
+        ${THIRDPARTY_DIRECTORY}/bzip2/blocksort.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/huffman.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/crctable.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/randtable.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/compress.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/decompress.c
+        ${THIRDPARTY_DIRECTORY}/bzip2/bzlib.c)
+    target_include_directories(bz2_static PUBLIC ${THIRDPARTY_DIRECTORY}/bzip2)
+    # bzlib.h includes windows.h: keep its min/max macros out of the C++ that includes it.
+    target_compile_definitions(bz2_static PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 # mcap - support for ROS 2 bag export
 add_subdirectory(${THIRDPARTY_DIRECTORY}/mcap)
 
-# rosbags/Ros1Bag reads bz2 chunks through libbz2. Like mcap's LZ4/ZSTD, this is
-# skipped on Windows: no package manager provides it there, so Ros1Bag.cpp compiles out
-# all chunk compression on MCAP_COMPRESSION_NO_LZ4 and reads uncompressed bags only.
+# rosbags/Ros1Bag reads bz2 and lz4 chunks (lz4 comes with the mcap target).
 add_library(ros1bag_compression INTERFACE)
-if(NOT WIN32)
+if(WIN32)
+    target_link_libraries(ros1bag_compression INTERFACE bz2_static)
+else()
     find_package(BZip2 REQUIRED)
     target_link_libraries(ros1bag_compression INTERFACE BZip2::BZip2)
 endif()
