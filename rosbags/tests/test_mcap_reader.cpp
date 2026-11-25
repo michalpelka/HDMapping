@@ -15,12 +15,15 @@
 #include "McapWriter.h"
 
 #include <laszip/laszip_api.h>
+#include <mcap/reader.hpp>
+#include <mcap/writer.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <random>
 #include <sstream>
 #include <string>
@@ -897,4 +900,122 @@ TEST_CASE("decodePc2: an absolute per-point timestamp ignores the header stamp e
     const auto points = rosbags::decodePc2(msg.data(), msg.size());
     REQUIRE(points.size() == 1);
     CHECK(points[0].timestamp == kPointTime);
+}
+
+namespace
+{
+
+// Copies every message of `in` into `out` with chunks of `compression`, small enough to give several chunks.
+void recompressMcap(const fs::path& in, const fs::path& out, mcap::Compression compression)
+{
+    mcap::McapReader reader;
+    REQUIRE(reader.open(in.string()).ok());
+    mcap::McapWriter writer;
+    mcap::McapWriterOptions options("ros2");
+    options.compression = compression;
+    options.chunkSize = 16 * 1024;
+    REQUIRE(writer.open(out.string(), options).ok());
+
+    std::map<mcap::ChannelId, mcap::ChannelId> channels;
+    const auto onProblem = [](const mcap::Status& status)
+    {
+        FAIL(status.message);
+    };
+    for (const auto& view : reader.readMessages(onProblem))
+    {
+        auto it = channels.find(view.channel->id);
+        if (it == channels.end())
+        {
+            mcap::Schema schema(view.schema->name, view.schema->encoding, view.schema->data);
+            writer.addSchema(schema);
+            mcap::Channel channel(view.channel->topic, view.channel->messageEncoding, schema.id, view.channel->metadata);
+            writer.addChannel(channel);
+            it = channels.emplace(view.channel->id, channel.id).first;
+        }
+        mcap::Message message = view.message;
+        message.channelId = it->second;
+        REQUIRE(writer.write(message).ok());
+    }
+    writer.close();
+    reader.close();
+}
+
+std::vector<std::string> chunkCompressions(const fs::path& path)
+{
+    mcap::McapReader reader;
+    REQUIRE(reader.open(path.string()).ok());
+    REQUIRE(reader.readSummary(mcap::ReadSummaryMethod::NoFallbackScan).ok());
+    std::vector<std::string> compressions;
+    for (const auto& index : reader.chunkIndexes())
+        compressions.push_back(index.compression);
+    reader.close();
+    return compressions;
+}
+
+struct McapContent
+{
+    std::vector<rosbags::McapPoint> points;
+    std::vector<double> imu_timestamps;
+};
+
+McapContent readMcapContent(const fs::path& path)
+{
+    McapContent content;
+    rosbags::McapFileReader reader(path);
+    REQUIRE_MESSAGE(reader.isOpen(), reader.error());
+    rosbags::McapFileReader::Callbacks callbacks;
+    callbacks.onPointCloud = [&](uint64_t, std::vector<rosbags::McapPoint>&& cloud)
+    {
+        content.points.insert(content.points.end(), cloud.begin(), cloud.end());
+    };
+    callbacks.onImu = [&](const rosbags::McapImuSample& s)
+    {
+        content.imu_timestamps.push_back(s.timestamp);
+    };
+    REQUIRE_MESSAGE(reader.read(callbacks), reader.error());
+    return content;
+}
+
+} // namespace
+
+TEST_CASE("McapFileReader: LZ4 and Zstd compressed chunks read the same as uncompressed ones")
+{
+    const auto plain = tempPath("hdmapping_reader_plain.mcap");
+    const double t0 = 3000.0;
+    {
+        rosbags::McapFileWriter writer(plain);
+        REQUIRE(writer.isOpen());
+        for (int i = 0; i < 5; ++i)
+            writer.writePointCloud(static_cast<uint64_t>((t0 + i) * 1e9), makeReaderPoints(500, t0 + i));
+        writer.writeImu(makeImuSamples(1000, t0));
+    }
+    const McapContent expected = readMcapContent(plain);
+    REQUIRE(expected.points.size() == 5 * 500);
+    REQUIRE(expected.imu_timestamps.size() == 1000);
+
+    for (const auto& [compression, name] :
+         { std::pair{ mcap::Compression::Lz4, std::string("lz4") }, std::pair{ mcap::Compression::Zstd, std::string("zstd") } })
+    {
+        CAPTURE(name);
+        const auto packed = tempPath(("hdmapping_reader_" + name + ".mcap").c_str());
+        recompressMcap(plain, packed, compression);
+
+        const auto compressions = chunkCompressions(packed);
+        REQUIRE(compressions.size() > 1);
+        for (const auto& c : compressions)
+            CHECK(c == name);
+
+        const McapContent got = readMcapContent(packed);
+        REQUIRE(got.points.size() == expected.points.size());
+        for (size_t i = 0; i < got.points.size(); ++i)
+        {
+            CHECK(got.points[i].x == expected.points[i].x);
+            CHECK(got.points[i].y == expected.points[i].y);
+            CHECK(got.points[i].z == expected.points[i].z);
+            CHECK(got.points[i].timestamp == expected.points[i].timestamp);
+        }
+        CHECK(got.imu_timestamps == expected.imu_timestamps);
+        fs::remove(packed);
+    }
+    fs::remove(plain);
 }

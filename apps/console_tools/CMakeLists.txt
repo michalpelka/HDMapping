@@ -119,8 +119,7 @@ endif()
 # bag_to_laz / laz_to_bag: the ROS1 bag twins of mcap_to_laz / laz_to_mcap,
 # built from the same sources with a define that swaps the reader (writer) for
 # rosbags/Ros1Bag -- no ROS installation needed. Reading compressed chunks needs
-# ros1bag_compression and mcap (see cmake/dependencies.cmake); on Windows only
-# uncompressed bags are read.
+# ros1bag_compression and mcap (see cmake/dependencies.cmake).
 add_executable(
         bag_to_laz mcap_to_laz.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.h ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.cpp

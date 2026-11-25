@@ -14,16 +14,11 @@ target_include_directories(mcap INTERFACE ${mcap_SOURCE_DIR}/cpp/mcap/include)
 # even for callers that only ever write Compression::None -- so the symbols
 # must be linked unconditionally, not just when compression is actually used.
 #
-# On Windows there's no system package manager providing liblz4/libzstd dev
-# packages (unlike apt on Linux / Homebrew on macOS), and no vendored/prebuilt
-# copy of them here yet -- see 3rdpartyBinary/Proj for that pattern if this
-# ever needs revisiting. Until then, disable mcap's LZ4/ZSTD code paths on
-# Windows via its own escape hatch: reading uncompressed/other-codec mcaps
-# still works, only Compression::Lz4/Zstd at write time become unavailable --
-# fine since this repo's writer (rosbags/McapWriter) only ever writes
-# Compression::None.
+# Linux and macOS link the system liblz4/libzstd; Windows links the static
+# lz4_static/zstd_static built from the lz4 and zstd submodules (see
+# cmake/dependencies.cmake).
 if(WIN32)
-    target_compile_definitions(mcap INTERFACE MCAP_COMPRESSION_NO_LZ4 MCAP_COMPRESSION_NO_ZSTD)
+    target_link_libraries(mcap INTERFACE lz4_static zstd_static)
 else()
     find_library(MCAP_LZ4_LIBRARY NAMES lz4)
     find_library(MCAP_ZSTD_LIBRARY NAMES zstd)
