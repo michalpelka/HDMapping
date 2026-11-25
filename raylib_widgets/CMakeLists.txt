@@ -18,11 +18,13 @@ add_library(raylib_widgets STATIC
     src/CompassRuler.cpp
     src/WindowFit.cpp
     src/ShortcutsTable.cpp
+    src/PlatformKeys.cpp
     src/OrbitCamera.cpp
     src/CenterOfRotationWindow.cpp
     src/PointPicking.cpp
     src/AppShell.cpp
     src/RayPlaneD.cpp
+    src/Timeline.cpp
 )
 
 target_include_directories(raylib_widgets PUBLIC include ${EIGEN3_INCLUDE_DIR})

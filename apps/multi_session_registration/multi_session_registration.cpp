@@ -37,6 +37,9 @@
 
 #include <HDMapping/Assert.h>
 #include <HDMapping/HDMAPPING_ConfigureInfo.hpp>
+#include <HDMapping/SessionPaths.h>
+
+#include <RaylibWidgets/PlatformKeys.h>
 
 #ifdef _WIN32
 #include "resource.h"
@@ -58,73 +61,73 @@ std::vector<std::string> infoLines = {
 
 // App specific shortcuts (Type and Shortcut are just for easy reference)
 static const std::vector<ShortcutEntry> appShortcuts = { { "Normal keys", "A", "" },
-                                                         { "", "Ctrl+A", "Add session(s)" },
+                                                         { "", SHORTCUT_CTRL "+A", "Add session(s)" },
                                                          { "", "B", "" },
-                                                         { "", "Ctrl+B", "" },
+                                                         { "", SHORTCUT_CTRL "+B", "" },
                                                          { "", "C", "" },
-                                                         { "", "Ctrl+C", "" },
+                                                         { "", SHORTCUT_CTRL "+C", "" },
                                                          { "", "D", "" },
-                                                         { "", "Ctrl+D", "Remove session(s)" },
+                                                         { "", SHORTCUT_CTRL "+D", "Remove session(s)" },
                                                          { "", "E", "" },
-                                                         { "", "Ctrl+E", "" },
+                                                         { "", SHORTCUT_CTRL "+E", "" },
                                                          { "", "F", "" },
-                                                         { "", "Ctrl+F", "" },
+                                                         { "", SHORTCUT_CTRL "+F", "" },
                                                          { "", "G", "" },
-                                                         { "", "Ctrl+G", "Move center of rotation to gizmo" },
+                                                         { "", SHORTCUT_CTRL "+G", "Move center of rotation to gizmo" },
                                                          { "", "H", "" },
-                                                         { "", "Ctrl+H", "" },
+                                                         { "", SHORTCUT_CTRL "+H", "" },
                                                          { "", "I", "" },
-                                                         { "", "Ctrl+I", "" },
+                                                         { "", SHORTCUT_CTRL "+I", "" },
                                                          { "", "J", "" },
-                                                         { "", "Ctrl+K", "" },
+                                                         { "", SHORTCUT_CTRL "+K", "" },
                                                          { "", "K", "" },
-                                                         { "", "Ctrl+K", "" },
+                                                         { "", SHORTCUT_CTRL "+K", "" },
                                                          { "", "L", "" },
-                                                         { "", "Ctrl+L", "Load sessions" },
+                                                         { "", SHORTCUT_CTRL "+L", "Load sessions" },
                                                          { "", "M", "" },
-                                                         { "", "Ctrl+M", "Manual loop closure" },
+                                                         { "", SHORTCUT_CTRL "+M", "Manual loop closure" },
                                                          { "", "N", "" },
-                                                         { "", "Ctrl+N", "" },
+                                                         { "", SHORTCUT_CTRL "+N", "" },
                                                          { "", "O", "" },
-                                                         { "", "Ctrl+O", "Open project" },
+                                                         { "", SHORTCUT_CTRL "+O", "Open project" },
                                                          { "", "P", "" },
-                                                         { "", "Ctrl+P", "" },
+                                                         { "", SHORTCUT_CTRL "+P", "" },
                                                          { "", "Q", "" },
-                                                         { "", "Ctrl+Q", "" },
+                                                         { "", SHORTCUT_CTRL "+Q", "" },
                                                          { "", "R", "" },
-                                                         { "", "Ctrl+R", "Random colors per session" },
+                                                         { "", SHORTCUT_CTRL "+R", "Random colors per session" },
                                                          { "", "Shift+R", "" },
                                                          { "", "S", "" },
-                                                         { "", "Ctrl+S", "Save project" },
-                                                         { "", "Ctrl+Shift+S", "Save project as" },
+                                                         { "", SHORTCUT_CTRL "+S", "Save project" },
+                                                         { "", SHORTCUT_CTRL "+Shift+S", "Save project as" },
                                                          { "", "T", "" },
-                                                         { "", "Ctrl+T", "" },
+                                                         { "", SHORTCUT_CTRL "+T", "" },
                                                          { "", "U", "" },
-                                                         { "", "Ctrl+U", "" },
+                                                         { "", SHORTCUT_CTRL "+U", "" },
                                                          { "", "V", "" },
-                                                         { "", "Ctrl+V", "" },
+                                                         { "", SHORTCUT_CTRL "+V", "" },
                                                          { "", "W", "" },
-                                                         { "", "Ctrl+W", "" },
+                                                         { "", SHORTCUT_CTRL "+W", "" },
                                                          { "", "X", "" },
-                                                         { "", "Ctrl+X", "" },
+                                                         { "", SHORTCUT_CTRL "+X", "" },
                                                          { "", "Y", "" },
-                                                         { "", "Ctrl+Y", "" },
+                                                         { "", SHORTCUT_CTRL "+Y", "" },
                                                          { "", "Z", "" },
-                                                         { "", "Ctrl+Z", "" },
+                                                         { "", SHORTCUT_CTRL "+Z", "" },
                                                          { "", "Shift+Z", "" },
                                                          { "", "1-9", "" },
                                                          { "Special keys", "Up arrow", "" },
                                                          { "", "Shift + up arrow", "" },
-                                                         { "", "Ctrl + up arrow", "" },
+                                                         { "", SHORTCUT_CTRL " + up arrow", "" },
                                                          { "", "Down arrow", "" },
                                                          { "", "Shift + down arrow", "" },
-                                                         { "", "Ctrl + down arrow", "" },
+                                                         { "", SHORTCUT_CTRL " + down arrow", "" },
                                                          { "", "Left arrow", "" },
                                                          { "", "Shift + left arrow", "" },
-                                                         { "", "Ctrl + left arrow", "" },
+                                                         { "", SHORTCUT_CTRL " + left arrow", "" },
                                                          { "", "Right arrow", "" },
                                                          { "", "Shift + right arrow", "" },
-                                                         { "", "Ctrl + right arrow", "" },
+                                                         { "", SHORTCUT_CTRL " + right arrow", "" },
                                                          { "", "Pg down", "" },
                                                          { "", "Pg up", "" },
                                                          { "", "- key", "" },
@@ -134,9 +137,9 @@ static const std::vector<ShortcutEntry> appShortcuts = { { "Normal keys", "A", "
                                                          { "", "Scroll", "" },
                                                          { "", "Shift + scroll", "" },
                                                          { "", "Shift + drag", "" },
-                                                         { "", "Ctrl + left click", "" },
-                                                         { "", "Ctrl + right click", "change center of rotation" },
-                                                         { "", "Ctrl + middle click", "change center of rotation" } };
+                                                         { "", SHORTCUT_CTRL " + left click", "" },
+                                                         { "", SHORTCUT_CTRL " + right click", "change center of rotation" },
+                                                         { "", SHORTCUT_CTRL " + middle click", "change center of rotation" } };
 
 float m_gizmo[] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
@@ -1293,7 +1296,7 @@ bool save_project_settings(const std::string& file_name, const ProjectSettings& 
     nlohmann::json jsession_file_names;
     for (const auto& pc : _project_settings.session_file_names)
     {
-        nlohmann::json jfn{ { "session_file_name", pc } };
+        nlohmann::json jfn{ { "session_file_name", toSessionPath(pc, file_name) } };
         jsession_file_names.push_back(jfn);
     }
     jj["session_file_names"] = jsession_file_names;
@@ -1481,7 +1484,7 @@ bool loadProject(const std::string& file_name, ProjectSettings& _project_setting
 
         for (const auto& fn_json : data["session_file_names"])
         {
-            const std::string fn = fn_json["session_file_name"];
+            const std::string fn = resolveProjectPath(fn_json["session_file_name"].get<std::string>(), file_name);
             _project_settings.session_file_names.push_back(fn);
             std::cout << "'" << fn << "'";
             if (!fs::exists(fn))
@@ -3125,23 +3128,24 @@ void display()
     {
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("Open project", "Ctrl+O"))
+            if (ImGui::MenuItem("Open project", SHORTCUT_CTRL "+O"))
                 openProject();
-            if (ImGui::MenuItem("Save project", "Ctrl+S", nullptr, project_settings.session_file_names.size() > 0))
+            if (ImGui::MenuItem("Save project", SHORTCUT_CTRL "+S", nullptr, project_settings.session_file_names.size() > 0))
                 saveProject();
-            if (ImGui::MenuItem("Save project as...", "Ctrl+Shift+S", nullptr, project_settings.session_file_names.size() > 0))
+            if (ImGui::MenuItem("Save project as...", SHORTCUT_CTRL "+Shift+S", nullptr, project_settings.session_file_names.size() > 0))
                 saveProjectAs();
             if (ImGui::IsItemHovered() && !project_file_name.empty())
                 ImGui::SetTooltip("Current project: %s", project_file_name.c_str());
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Add session(s)", "Ctrl+A"))
+            if (ImGui::MenuItem("Add session(s)", SHORTCUT_CTRL "+A"))
                 addSession();
-            if (ImGui::MenuItem("Remove session(s)", "Ctrl+D", nullptr, project_settings.session_file_names.size() > 0))
+            if (ImGui::MenuItem("Remove session(s)", SHORTCUT_CTRL "+D", nullptr, project_settings.session_file_names.size() > 0))
                 remove_gui = true;
 
-            if (ImGui::MenuItem("Load sessions", "Ctrl+L", nullptr, (project_settings.session_file_names.size() > 0) && !loaded_sessions))
+            if (ImGui::MenuItem(
+                    "Load sessions", SHORTCUT_CTRL "+L", nullptr, (project_settings.session_file_names.size() > 0) && !loaded_sessions))
                 loadSessions();
 
             ImGui::Separator();
@@ -3174,6 +3178,24 @@ void display()
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Save the current poses of one session as a TUM trajectory (t[s] x y z qx qy qz qw)");
+
+            if (ImGui::MenuItem("Save all point clouds as single LAZ", nullptr, nullptr, loaded_sessions && !sessions.empty()))
+            {
+                const std::string output_file_name = mandeye::fd::SaveFileDialog(
+                    "Save all point clouds as single LAZ", mandeye::fd::LAS_LAZ_filter, ".laz", "all_sessions.laz");
+                if (!output_file_name.empty())
+                {
+                    if (save_all_sessions_to_las(sessions, output_file_name))
+                        std::cout << "Saved: " << output_file_name << std::endl;
+                    else
+                        pfd::message("Export failed", "Could not write '" + output_file_name + "'", pfd::choice::ok, pfd::icon::error);
+                }
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(
+                    "Merge the visible scans of all visible sessions, with their current poses, into one las/laz file.\n"
+                    "point_source_ID = session index. Points are written as loaded: with 'Downsample during load' on,\n"
+                    "the file is downsampled too.");
 
             ImGui::Separator();
             if (ImGui::BeginMenu("Save all marked trajectories", sessions.size() > 0))
@@ -3678,6 +3700,8 @@ void display()
                 ImGui::EndMenu();
             }
 
+            ImGui::Separator();
+
             ImGui::EndMenu();
         }
 
@@ -3701,7 +3725,10 @@ void display()
 
             // bool prev_is_loop_closure_gui
             ImGui::MenuItem(
-                "Manual Loop Closure", "Ctrl+M", &is_loop_closure_gui, (number_visible_sessions == 1 || number_visible_sessions == 2));
+                "Manual Loop Closure",
+                SHORTCUT_CTRL "+M",
+                &is_loop_closure_gui,
+                (number_visible_sessions == 1 || number_visible_sessions == 2));
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Manually connect overlapping scan sections");
 

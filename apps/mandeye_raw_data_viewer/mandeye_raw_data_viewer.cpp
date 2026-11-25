@@ -20,13 +20,21 @@
 #include <Core/raylib_utils.hpp>
 #include <Core/transformations.h>
 
+#include <RaylibWidgets/PlatformKeys.h>
+#include <RaylibWidgets/Timeline.h>
+
 #include <Eigen/Eigen>
 
 #include "../lidar_odometry_step_1/lidar_odometry.h"
 #include "../lidar_odometry_step_1/lidar_odometry_utils.h"
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <filesystem>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+#include <string_view>
 
 #include <HDMapping/HDMAPPING_ConfigureInfo.hpp>
 
@@ -86,6 +94,11 @@ struct ImuData
 ImuData imu_data_plot;
 
 std::vector<std::string> laz_files;
+//! Time span of every LAZ and IMU file load_data read, drawn as lanes under the playback timeline.
+InputFileSpans file_spans;
+//! [start, end] LiDAR-clock times [s] of the stretches VQF detected the IMU at rest.
+std::vector<std::pair<double, double>> motionless_segments;
+bool show_file_lanes = true;
 std::vector<std::string> photos_files;
 std::map<uint64_t, std::string> photo_files_ts;
 
@@ -98,6 +111,13 @@ bool fusionConventionNed = false;
 int number_of_points_threshold = 20000;
 bool is_init = false;
 int index_rendered_points_local = -1;
+
+// Playback bar (bottom of the window). The playhead is a time in seconds since the
+// first chunk's start; index_rendered_points_local follows it while playing/scrubbing.
+double playhead_sec = 0.0;
+bool playback_playing = false;
+float playback_speed = 1.0f;
+int playhead_index = -1; //!< chunk the playhead last matched; another index means it was picked elsewhere
 // std::vector<std::vector<Point3Di>> all_points_local;
 // std::vector<std::vector<Point3Di>> all_points_local;
 // std::vector<std::vector<int>> all_lidar_ids;
@@ -888,7 +908,7 @@ std::vector<std::pair<Eigen::Vector3d, Eigen::Matrix3d>> get_mean_cov()
 
 // Re-chunks the already-loaded points (g_points_per_file / g_timestamps_cache / g_poses_cache)
 // into all_data using the current number_of_points_threshold. Smaller thresholds mean each
-// Index step in the toolbar covers less time, giving finer time navigation.
+// Index step in the playback bar covers less time, giving finer time navigation.
 void rebuildAllData(bool preserve_position)
 {
     double preserved_time = 0.0;
@@ -1007,6 +1027,11 @@ void rebuildAllData(bool preserve_position)
         is_init = false;
         index_rendered_points_local = -1;
     }
+
+    // re-anchor the playhead on the (re)selected chunk; a new dataset starts paused
+    playhead_index = -1;
+    if (!preserve_position)
+        playback_playing = false;
 }
 
 void loadFiles(std::vector<std::string> input_file_names)
@@ -1025,7 +1050,7 @@ void loadFiles(std::vector<std::string> input_file_names)
     if (input_file_names.empty())
         return;
 
-    if (load_data(input_file_names, params, pointsPerFile, imu_data, false))
+    if (load_data(input_file_names, params, pointsPerFile, imu_data, false, file_spans))
     {
         // clear possible previous data
 
@@ -1130,17 +1155,53 @@ void loadFiles(std::vector<std::string> input_file_names)
 
         std::map<double, std::pair<Eigen::Matrix4d, double>> trajectory;
 
+        // Motionless segments: runs of samples VQF flags as rest. It flags rest once the
+        // IMU has been still for restMinT, so each run is moved that much earlier.
+        motionless_segments.clear();
+        bool resting = false;
+        double rest_start = 0.0, previous_t = 0.0;
+
+        // VQF resets rest detection on any single sample deviating more than restThGyr / restThAcc, so
+        // the per-sample noise of an IMU much faster than SAMPLE_PERIOD (e.g. a 1451 Hz Murata) never lets
+        // it detect rest. Feed VQF a moving average over SAMPLE_PERIOD; at 200 Hz that is a single sample.
+        const size_t vqf_window = std::max<size_t>(1, static_cast<size_t>(std::lround(SAMPLE_PERIOD / avg_dt)));
+        if (vqf_window > 1)
+            spdlog::info("VQF input averaged over {} samples", vqf_window);
+
         int counter = 1;
 
-        for (const auto& [timestamp_pair, gyr, acc] : imu_data)
+        for (size_t i = 0; i < imu_data.size(); i++)
         {
+            const auto& [timestamp_pair, gyr, acc] = imu_data[i];
+
+            const size_t window_begin = i + 1 >= vqf_window ? i + 1 - vqf_window : 0;
+            Eigen::Vector3d gyr_avg = Eigen::Vector3d::Zero();
+            Eigen::Vector3d acc_avg = Eigen::Vector3d::Zero();
+            for (size_t k = window_begin; k <= i; k++)
+            {
+                gyr_avg += std::get<1>(imu_data[k]).cast<double>();
+                acc_avg += std::get<2>(imu_data[k]).cast<double>();
+            }
+            gyr_avg /= static_cast<double>(i + 1 - window_begin);
+            acc_avg /= static_cast<double>(i + 1 - window_begin);
+
             const double g = 9.81;
-            vqf_real_t gyr_vqf[3] = { static_cast<double>(gyr.x()), static_cast<double>(gyr.y()), static_cast<double>(gyr.z()) };
-            vqf_real_t acc_vqf[3] = { static_cast<double>(acc.x()) * g,
-                                      static_cast<double>(acc.y()) * g,
-                                      static_cast<double>(acc.z()) * g };
+            vqf_real_t gyr_vqf[3] = { gyr_avg.x(), gyr_avg.y(), gyr_avg.z() };
+            vqf_real_t acc_vqf[3] = { acc_avg.x() * g, acc_avg.y() * g, acc_avg.z() * g };
 
             vqf.update(gyr_vqf, acc_vqf);
+
+            const bool rest = vqf.getRestDetected();
+            if (rest && !resting)
+            {
+                rest_start = timestamp_pair.first - vqf_params.restMinT;
+                if (!motionless_segments.empty())
+                    rest_start = std::max(rest_start, motionless_segments.back().second);
+            }
+            else if (!rest && resting)
+                motionless_segments.emplace_back(rest_start, previous_t);
+            resting = rest;
+            previous_t = timestamp_pair.first;
 
             vqf_real_t quat[4];
             vqf.getQuat6D(quat);
@@ -1169,6 +1230,10 @@ void loadFiles(std::vector<std::string> input_file_names)
             imu_data_plot.pitch.push_back(euler.y());
             imu_data_plot.roll.push_back(euler.x());
         }
+
+        if (resting)
+            motionless_segments.emplace_back(rest_start, previous_t);
+        spdlog::info("{} motionless segment(s) detected", motionless_segments.size());
 
         // timeline x-axis is shown relative to the first IMU sample so it starts at 0 [s];
         // datasetStart keeps the absolute value for reference / annotations
@@ -1380,7 +1445,7 @@ void settings_gui()
         {
             ImGui::BeginTooltip();
             ImGui::Text("Max number of points per rendered chunk (one 'Index' step).");
-            ImGui::Text("Lower = shorter time span per chunk = finer time navigation with the Index slider.");
+            ImGui::Text("Lower = shorter time span per chunk = finer time navigation in the playback bar.");
             ImGui::EndTooltip();
         }
         ImGui::BeginDisabled(!is_init);
@@ -1537,6 +1602,261 @@ void settings_gui()
     }
 
     ImGui::End();
+}
+
+//! Absolute LiDAR time of chunk `i`'s first point [s].
+static double chunkStartSec(int i)
+{
+    return all_data[i].points_local.front().timestamp;
+}
+
+//! Time the playback bar spans [s]: from the first chunk's start to the last chunk's last point.
+static double playbackDurationSec()
+{
+    return std::max(0.0, all_data.back().points_local.back().timestamp - chunkStartSec(0));
+}
+
+//! Chunk shown at the playhead: the last one starting at or before it.
+//! @param t time since the first chunk's start [s]
+static int chunkAtSec(double t)
+{
+    const double abs_t = chunkStartSec(0) + t;
+    const auto it = std::upper_bound(
+        all_data.begin(),
+        all_data.end(),
+        abs_t,
+        [](double lhs, const AllData& rhs)
+        {
+            return lhs < rhs.points_local.front().timestamp;
+        });
+    return std::max(0, static_cast<int>(std::distance(all_data.begin(), it)) - 1);
+}
+
+//! "YYYY-MM-DD HH:MM:SS.mmm UTC" for a Unix-epoch time; empty when `sec` is not one.
+//! LiDARs synced to PTP/GNSS count from 1970; unsynced ones count from power-on, which
+//! stays far below the year-2000 cutoff.
+static std::string epochToUtcString(double sec)
+{
+    if (!(sec >= 946684800.0 && sec < 4102444800.0)) // 2000-01-01 .. 2100-01-01
+        return {};
+    const long long totalMs = std::llround(sec * 1000.0);
+    const std::time_t whole = static_cast<std::time_t>(totalMs / 1000);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &whole);
+#else
+    gmtime_r(&whole, &tm);
+#endif
+    char buf[48];
+    const size_t n = std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    std::snprintf(buf + n, sizeof(buf) - n, ".%03d UTC", static_cast<int>(totalMs % 1000));
+    return buf;
+}
+
+//! Plays or pauses, replaying from the start once the end was reached -- shared by the
+//! Play/Pause button and Space.
+static void togglePlayback()
+{
+    if (!playback_playing && playhead_sec >= playbackDurationSec())
+    {
+        playhead_sec = 0.0;
+        index_rendered_points_local = 0;
+        playhead_index = 0;
+    }
+    playback_playing = !playback_playing;
+}
+
+//! Re-anchors the playhead on a chunk picked elsewhere (arrow keys, index field, Rebin),
+//! handles Space and advances the playhead while playing. Needs a valid index_rendered_points_local.
+static void updatePlayback()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    if (index_rendered_points_local != playhead_index)
+        playhead_sec = chunkStartSec(index_rendered_points_local) - chunkStartSec(0);
+
+    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false))
+        togglePlayback();
+
+    if (playback_playing)
+    {
+        const double duration = playbackDurationSec();
+        playhead_sec += io.DeltaTime * playback_speed;
+        if (playhead_sec >= duration)
+        {
+            playhead_sec = duration;
+            playback_playing = false;
+        }
+        index_rendered_points_local = chunkAtSec(playhead_sec);
+    }
+    playhead_index = index_rendered_points_local;
+}
+
+//! Bar along the bottom of the window: Play/Pause, playhead time, speed, chunk index,
+//! chunk timestamp and a scrubbable timeline.
+static void playbackBar()
+{
+    const double duration = playbackDurationSec();
+    // The timeline starts at the first chunk.
+    auto pos = [duration](double t)
+    {
+        return static_cast<float>((t - chunkStartSec(0)) / duration);
+    };
+
+    // Motionless segments as green bands on the track, and the LAZ and IMU files as
+    // Gantt-style lanes under it, alternating shades telling neighbours apart.
+    std::vector<raylib_widgets::TimelineSpan> spans;
+    std::vector<raylib_widgets::TimelineLane> lanes;
+    if (duration > 0.0)
+    {
+        for (const auto& [from, to] : motionless_segments)
+            if (pos(to) >= 0.f && pos(from) <= 1.f)
+                spans.push_back({ pos(from), pos(to), IM_COL32(80, 200, 120, 110), "motionless" });
+
+        if (show_file_lanes)
+        {
+            const auto addLane =
+                [&](std::string name, std::string_view unit, const std::vector<InputFileSpan>& files, ImU32 shade, ImU32 altShade)
+            {
+                raylib_widgets::TimelineLane lane{ std::move(name), {} };
+                for (const InputFileSpan& f : files)
+                {
+                    if (f.count == 0)
+                        continue;
+                    std::ostringstream label;
+                    label << fs::path(f.file).filename().string() << "\n"
+                          << std::fixed << std::setprecision(3) << f.first - chunkStartSec(0) << " .. " << f.last - chunkStartSec(0)
+                          << " s (" << f.last - f.first << " s), " << f.count << " " << unit;
+                    lane.bars.push_back({ pos(f.first), pos(f.last), lane.bars.size() % 2 == 0 ? shade : altShade, label.str() });
+                }
+                if (!lane.bars.empty())
+                    lanes.push_back(std::move(lane));
+            };
+            addLane("LAZ", "points", file_spans.laz, IM_COL32(80, 140, 230, 255), IM_COL32(50, 100, 190, 255));
+            addLane("IMU", "samples", file_spans.imu, IM_COL32(230, 150, 60, 255), IM_COL32(190, 110, 40, 255));
+        }
+    }
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float timelineH = 18.f + ImGui::GetTextLineHeight();
+    const float barH = style.WindowPadding.y * 2.f + ImGui::GetFrameHeight() + style.ItemSpacing.y + timelineH +
+        raylib_widgets::kTimelineLaneHeight * static_cast<float>(lanes.size());
+    // NoNav: Space must not also press a focused bar button, and the arrows keep stepping chunks.
+    if (ImGui::BeginViewportSideBar(
+            "##playback",
+            ImGui::GetMainViewport(),
+            ImGuiDir_Down,
+            barH,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav))
+    {
+        if (ImGui::Button(playback_playing ? "Pause" : "Play", ImVec2(60.f, 0.f)))
+            togglePlayback();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Space");
+        ImGui::SameLine();
+        ImGui::Text("%7.1f / %.1f s", playhead_sec, duration);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160.f);
+        ImGui::SliderFloat("Speed", &playback_speed, 0.1f, 50.f, "%.1fx", ImGuiSliderFlags_Logarithmic);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Playback rate, as a multiple of real time (" SHORTCUT_CTRL "+click to type)");
+
+        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(20, 0));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Index:");
+        ImGui::SameLine();
+        int tempIndex = index_rendered_points_local;
+        ImGui::SetNextItemWidth(ImGuiNumberWidth);
+        if (ImGui::InputInt("##irpli", &tempIndex, 1, 10))
+            index_rendered_points_local = std::clamp(tempIndex, 0, static_cast<int>(all_data.size()) - 1);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", laz_files[indexes_to_filename[index_rendered_points_local]].c_str());
+        ImGui::SameLine();
+        ImGui::Text("/ %d", static_cast<int>(all_data.size()) - 1);
+
+        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(20, 0));
+        ImGui::SameLine();
+        const double ts = chunkStartSec(index_rendered_points_local);
+        const std::string utc = epochToUtcString(ts);
+        if (utc.empty())
+            ImGui::Text("Timestamp: %.6f [s]", ts);
+        else
+            ImGui::Text("Timestamp: %s", utc.c_str());
+        if (ImGui::IsItemHovered())
+        {
+            if (utc.empty())
+                ImGui::SetTooltip("Click to copy to clipboard");
+            else
+                ImGui::SetTooltip("%.6f [s] since 1970-01-01 UTC\nClick to copy to clipboard", ts);
+        }
+        if (ImGui::IsItemClicked())
+        {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "%.6f", ts);
+            ImGui::SetClipboardText(tmp);
+        }
+
+        float progress = duration > 0.0 ? static_cast<float>(playhead_sec / duration) : 0.f;
+        if (raylib_widgets::timeline("##timeline", progress, duration, timelineH, spans, lanes))
+        {
+            playhead_sec = progress * duration;
+            index_rendered_points_local = chunkAtSec(playhead_sec);
+            playhead_index = index_rendered_points_local;
+        }
+    }
+    ImGui::End();
+}
+
+//! Writes the points of every motionless segment to `folder`/motionless_NNN.laz, in the LiDAR frame and
+//! with their recorded timestamps.
+static void saveMotionlessSegments(const fs::path& folder)
+{
+    std::vector<std::vector<Eigen::Vector3d>> points(motionless_segments.size());
+    std::vector<std::vector<unsigned short>> intensities(motionless_segments.size());
+    std::vector<std::vector<double>> timestamps(motionless_segments.size());
+
+    // The segments are sorted and disjoint, so a point can only fall into the last one starting before it.
+    for (const auto& file_points : g_points_per_file)
+    {
+        for (const auto& p : file_points)
+        {
+            const auto next = std::upper_bound(
+                motionless_segments.begin(),
+                motionless_segments.end(),
+                p.timestamp,
+                [](double t, const std::pair<double, double>& segment)
+                {
+                    return t < segment.first;
+                });
+            if (next == motionless_segments.begin())
+                continue;
+            const size_t s = static_cast<size_t>(std::distance(motionless_segments.begin(), next)) - 1;
+            if (p.timestamp > motionless_segments[s].second)
+                continue;
+            points[s].push_back(p.point);
+            intensities[s].push_back(static_cast<unsigned short>(p.intensity));
+            timestamps[s].push_back(p.timestamp);
+        }
+    }
+
+    for (size_t s = 0; s < motionless_segments.size(); s++)
+    {
+        const auto [from, to] = motionless_segments[s];
+        std::ostringstream name;
+        name << "motionless_" << std::setw(3) << std::setfill('0') << s << ".laz";
+        const fs::path file = folder / name.str();
+        if (points[s].empty())
+        {
+            spdlog::warn("motionless segment {} has no points, '{}' not written", s, file.string());
+            continue;
+        }
+        const double origin = chunkStartSec(0);
+        if (exportLaz(file.string(), points[s], intensities[s], timestamps[s]))
+            spdlog::info("saved '{}': {:.3f} .. {:.3f} s, {} points", file.string(), from - origin, to - origin, points[s].size());
+        else
+            spdlog::error("problem with saving file: '{}'", file.string());
+    }
 }
 
 void display()
@@ -1772,6 +2092,8 @@ void display()
             index_rendered_points_local = 0;
         if (index_rendered_points_local >= all_data.size())
             index_rendered_points_local = all_data.size() - 1;
+
+        updatePlayback();
     }
 
     // ask to load the nearest photo
@@ -1787,7 +2109,7 @@ void display()
             if (ImGui::Button("Open folder"))
                 openFolder();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Select folder containing files for analyze (Ctrl+O), or drop folders/files on the window");
+                ImGui::SetTooltip("Select folder containing files for analyze (" SHORTCUT_CTRL "+O), or drop folders/files on the window");
 
             ImGui::SameLine();
 
@@ -1803,6 +2125,16 @@ void display()
                 ImGui::MenuItem("Skip first file", nullptr, &skip_first_file);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Drop the points of the first LAZ file on the next load, as step 1 does");
+
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save motionless segments as LAZ", nullptr, false, is_init && !motionless_segments.empty()))
+                {
+                    const std::string folder = mandeye::fd::SelectFolder("Select folder for motionless segments");
+                    if (!folder.empty())
+                        saveMotionlessSegments(folder);
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Write the points of each green 'motionless' band to its own motionless_NNN.laz in a chosen folder");
 
                 ImGui::EndPopup();
             }
@@ -1867,6 +2199,9 @@ void display()
                 ImGui::SetTooltip("Show the mean and covariance ellipsoid representation");
 
             ImGui::MenuItem("Show IMU data", nullptr, &show_imu_data);
+            ImGui::MenuItem("Show files on the timeline", nullptr, &show_file_lanes);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("LAZ and IMU csv files as lanes under the playback timeline, Gantt-style");
             ImGui::MenuItem("Show cameras data", nullptr, &show_cameras_data);
 
             ImGui::MenuItem("Intensity shading", nullptr, &intensity_shading);
@@ -1911,55 +2246,6 @@ void display()
         ImGui::SameLine();
         ImGui::Dummy(ImVec2(20, 0));
         ImGui::SameLine();
-
-        if (all_data.size() > 0)
-        {
-            int tempIndex = index_rendered_points_local;
-            ImGui::Text("Index: ");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Index of rendered points local");
-            ImGui::SameLine();
-            ImGui::PushItemWidth(ImGuiNumberWidth);
-            ImGui::SliderInt("##irpls", &tempIndex, 0, static_cast<int>(all_data.size() - 1));
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::BeginTooltip();
-                std::string fn = laz_files[indexes_to_filename[index_rendered_points_local]];
-                ImGui::Text(fn.c_str());
-                ImGui::EndTooltip();
-            }
-            ImGui::SameLine();
-            ImGui::InputInt("##irpli", &tempIndex, 1, 10);
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::BeginTooltip();
-                std::string fn = laz_files[indexes_to_filename[index_rendered_points_local]];
-                ImGui::Text(fn.c_str());
-                ImGui::EndTooltip();
-            }
-            ImGui::PopItemWidth();
-
-            if ((tempIndex >= 0) && (tempIndex < all_data.size()))
-                index_rendered_points_local = tempIndex;
-
-            ImGui::SameLine();
-            double ts = all_data[index_rendered_points_local].points_local[0].timestamp; // * 1e9;
-            ImGui::Text("Timestamp: %.6f [ns]", ts);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Click to copy to clipboard");
-            if (ImGui::IsItemClicked())
-            {
-                char tmp[64];
-                snprintf(tmp, sizeof(tmp), "%.6f", ts);
-                ImGui::SetClipboardText(tmp);
-            }
-
-            ImGui::SameLine();
-            ImGui::Dummy(ImVec2(20, 0));
-            ImGui::SameLine();
-        }
-
-        ImGui::SameLine();
         ImGui::Text("(%.1f FPS)", ImGui::GetIO().Framerate);
 
         ImGui::SameLine(
@@ -1979,6 +2265,9 @@ void display()
 
         ImGui::EndMainMenuBar();
     }
+
+    if (!all_data.empty())
+        playbackBar();
 
     info_window(infoLines, appShortcuts);
 
