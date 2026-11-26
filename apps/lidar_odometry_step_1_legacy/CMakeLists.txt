@@ -16,7 +16,8 @@ set(SOURCES
   ${STEP1_DIR}/lidar_odometry.cpp
   ${STEP1_DIR}/points_global_spill.cpp
   ${REPOSITORY_DIRECTORY}/recording_sources/laz_csv_source.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/raw_cloud_loader.cpp
+  ${REPOSITORY_DIRECTORY}/recording_sources/recording_source_factory.cpp
+  ${STEP1_DIR}/raw_cloud_loader.cpp
   ${STEP1_DIR}/toml_io.cpp
   "../../core/src/utils.cpp"
 )

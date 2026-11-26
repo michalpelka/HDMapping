@@ -121,3 +121,13 @@ bool BagSourceConfigUi::draw()
     ImGui::EndDisabled();
     return open && ready;
 }
+
+std::string BagSourceConfigUi::title() const
+{
+    return "Open ROS bag / MCAP";
+}
+
+std::shared_ptr<RecordingSource> BagSourceConfigUi::open(std::string& error) const
+{
+    return open_bag_source(config_, error);
+}

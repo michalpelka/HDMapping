@@ -15,10 +15,9 @@
 #undef ShowCursor
 #endif
 
-#include "bag_source.h"
-#include "bag_source_ui.h"
 #include "lidar_odometry.h"
 #include "lidar_odometry_utils.h"
+#include "recording_source_factory.h"
 #include "render_cache.h"
 #include "trajectory_follow.h"
 
@@ -206,9 +205,22 @@ bool pipelinePending = false;
 bool pendingCompute = true, pendingSave = true;
 std::string pendingFolder;
 void startPipeline(const std::string& folder, bool compute, bool save);
-std::shared_ptr<RecordingSource> pending_recording; //!< set with startPipeline; step1() loads it instead of the folder
-std::unique_ptr<BagSourceConfigUi> bag_config_ui; //!< the open ROS bag / MCAP window, if any
-std::string bag_open_error;
+void openData(const std::string& folder = "", bool compute = true, bool save = true);
+// What the next startPipeline() loads: a recording an options window already opened, or paths the kind opens in step1()
+std::shared_ptr<RecordingSource> pending_recording;
+std::shared_ptr<const RecordingSourceFactory> pending_kind;
+std::vector<fs::path> pending_paths;
+std::unique_ptr<RecordingSourceConfigUi> source_config_ui; //!< the open options window of a recording kind, if any
+std::string source_open_error;
+bool source_config_compute = true, source_config_save = true; //!< startPipeline arguments once the window opens the recording
+
+//! Folder a recording given as paths is named after: the folder itself, or the folder of the first file.
+static fs::path recording_folder(const std::vector<fs::path>& paths)
+{
+    if (paths.empty())
+        return {};
+    return fs::is_directory(paths.front()) ? paths.front() : paths.front().parent_path();
+}
 
 static void resources_gui()
 {
@@ -700,53 +712,48 @@ Eigen::Vector3d GLWidgetGetOGLPos(int x, int y, const ObservationPicking& observ
 void step1(const std::string& input_folder_name, const std::atomic<bool>& loPause)
 {
     trajectory_points_dirty = true;
-    std::vector<std::string> input_file_names;
-    // a recording prepared in the ROS bag / MCAP window is loaded instead of the folder's files
-    const std::shared_ptr<RecordingSource> recording = std::exchange(pending_recording, nullptr);
+    // a recording opened by an options window, or the paths its kind opens here
+    std::shared_ptr<RecordingSource> recording = std::exchange(pending_recording, nullptr);
+    const auto kind = std::exchange(pending_kind, nullptr);
+    const auto paths = std::exchange(pending_paths, {});
 
-    std::cout << "Selected folder: '" << input_folder_name << std::endl;
+    std::cout << "Selected recording: '" << input_folder_name << "'" << std::endl;
 
-    if (recording || fs::exists(input_folder_name))
+    std::string error;
+    if (!recording && kind)
     {
-        bool loaded = false;
-        if (recording)
-        {
-            InputFileSpans spans;
-            loaded = load_data(recording, params, pointsPerFile, imu_data, spans);
-            if (loaded)
-                working_directory = recording->workingDirectory().string();
-        }
-        else
-        {
-            RunReport::Scope discovery(params.run_report.get(), RunReport::Stage::Loading);
-            for (const auto& entry : fs::directory_iterator(input_folder_name))
-                if (entry.is_regular_file())
-                    input_file_names.push_back(entry.path().string());
+        RunReport::Scope discovery(params.run_report.get(), RunReport::Stage::Loading);
+        std::cout << "Opening as " << kind->name() << std::endl;
+        recording = kind->open(paths, error);
+        discovery.finish();
+    }
 
-            discovery.finish();
-            loaded = load_data(input_file_names, params, pointsPerFile, imu_data, full_debug_messages);
-            if (loaded)
-                working_directory = fs::path(input_file_names[0]).parent_path().string();
-        }
+    bool loaded = false;
+    if (recording)
+    {
+        InputFileSpans spans;
+        loaded = load_data(recording, params, pointsPerFile, imu_data, spans);
         if (loaded)
+            working_directory = recording->workingDirectory().string();
+    }
+    if (loaded)
+    {
+        calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
+        if (compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
         {
-            calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
-            if (compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
-            {
-                release_raw_clouds(pointsPerFile, params); // nothing after step 1 reads them
-                step_1_done = true;
-                publish_trajectory_preview(worker_data, true);
-            }
-            else
-                std::cerr << "Lidar odometry step 1 failed (see the messages above)" << std::endl;
+            release_raw_clouds(pointsPerFile, params); // nothing after step 1 reads them
+            step_1_done = true;
+            publish_trajectory_preview(worker_data, true);
         }
         else
-        {
-            std::string message_info = "Problem with loading data from folder '" + input_folder_name +
-                "' (Pease check if folder exists). Program will close once You click OK!!!";
-            std::cout << message_info << std::endl;
-            throw std::runtime_error("Input data loading failed: " + input_folder_name);
-        }
+            std::cerr << "Lidar odometry step 1 failed (see the messages above)" << std::endl;
+    }
+    else
+    {
+        std::string message_info = "Problem with loading data from '" + input_folder_name + "'" + (error.empty() ? "" : ": " + error) +
+            ". Program will close once You click OK!!!";
+        std::cout << message_info << std::endl;
+        throw std::runtime_error("Input data loading failed: " + input_folder_name + (error.empty() ? "" : ": " + error));
     }
 }
 
@@ -1230,9 +1237,7 @@ void settings_gui()
         {
             if (ImGui::Button("Load data"))
             {
-                const auto folder = mandeye::fd::SelectFolder("Select Mandeye data folder");
-                if (!folder.empty())
-                    startPipeline(folder, false, false);
+                openData("", false, false);
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
@@ -1886,13 +1891,47 @@ void progress_window()
     ImGui::End();
 }
 
-//! folder: Mandeye data folder to process; empty asks for one with a folder dialog.
+//! Hands paths to the recording kind that reads them: its options window when it has one, otherwise the pipeline, which
+//! opens them in the worker.
+void openRecording(const std::vector<fs::path>& paths, bool compute = true, bool save = true)
+{
+    if (paths.empty())
+        return;
+    const auto kind = RecordingSourceFactory::find(paths);
+    if (!kind)
+    {
+        std::lock_guard lock(completionMutex);
+        completionMessage =
+            "No recording kind reads '" + paths.front().string() + "'" + (paths.size() > 1 ? " and the other dropped paths" : "");
+        return;
+    }
+    if (auto ui = kind->configure(paths))
+    {
+        source_open_error.clear();
+        source_config_ui = std::move(ui);
+        source_config_compute = compute;
+        source_config_save = save;
+        return;
+    }
+    pending_kind = kind;
+    pending_paths = paths;
+    startPipeline(recording_folder(paths).string(), compute, save);
+}
+
+//! folder: recording folder to process; empty asks for one with a folder dialog.
 //! Loading and processing share one owned worker; drawing is suspended only during initial preparation.
-void openData(const std::string& folder = "")
+void openData(const std::string& folder, bool compute, bool save)
 {
     const std::string input_folder_name = folder.empty() ? mandeye::fd::SelectFolder("Select Mandeye data folder") : folder;
     if (!input_folder_name.empty())
-        startPipeline(input_folder_name, true, true);
+        openRecording({ fs::path(input_folder_name) }, compute, save);
+}
+
+//! Asks for recording files of any registered kind and opens them.
+void openRecordingFiles()
+{
+    const auto files = mandeye::fd::OpenFileDialog("Select recording", RecordingSourceFactory::fileFilters(), true);
+    openRecording(std::vector<fs::path>(files.begin(), files.end()));
 }
 
 void startPipeline(const std::string& folder, bool compute, bool save)
@@ -1905,41 +1944,26 @@ void startPipeline(const std::string& folder, bool compute, bool save)
     pipelinePending = true;
 }
 
-//! Opens the window that configures a ROS1 bag or MCAP file; asks for the file when none is given.
-void openBag(const std::string& file = "")
-{
-    std::string path = file;
-    if (path.empty())
-    {
-        const auto files = mandeye::fd::OpenFileDialog("Select ROS1 bag or MCAP file", mandeye::fd::Bag_filter, false);
-        if (files.empty())
-            return;
-        path = files.front();
-    }
-    bag_open_error.clear();
-    bag_config_ui = std::make_unique<BagSourceConfigUi>(path);
-}
-
-//! Window with the topic choice of the selected bag; Open loads it and starts processing.
-static void bag_source_window()
+//! Options window of the recording kind being opened; its Open button starts the pipeline.
+static void source_config_window()
 {
     bool open = true;
-    ImGui::Begin("Open ROS bag / MCAP", &open, ImGuiWindowFlags_AlwaysAutoResize);
-    if (bag_config_ui->draw())
+    ImGui::Begin(source_config_ui->title().c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize);
+    if (source_config_ui->draw())
     {
-        auto source = open_bag_source(bag_config_ui->config(), bag_open_error);
+        auto source = source_config_ui->open(source_open_error);
         if (source)
         {
             pending_recording = std::move(source);
-            startPipeline(pending_recording->workingDirectory().string(), true, true);
+            startPipeline(pending_recording->workingDirectory().string(), source_config_compute, source_config_save);
             open = false;
         }
     }
-    if (!bag_open_error.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", bag_open_error.c_str());
+    if (!source_open_error.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", source_open_error.c_str());
     ImGui::End();
     if (!open)
-        bag_config_ui.reset();
+        source_config_ui.reset();
 }
 
 static void launchPipeline(const std::string& folder, bool compute, bool save)
@@ -2056,49 +2080,29 @@ bool step1(
     std::vector<WorkerData>& worker_data,
     const std::atomic<bool>& loPause)
 {
-    // a ROS1 bag or MCAP file is read with its only lidar and IMU topics (the GUI lets the user choose)
-    const bool bag = is_bag_file(folder) && fs::is_regular_file(folder);
-    params.run_report =
-        std::make_shared<RunReport>(bag ? fs::path(folder).parent_path() : fs::path(folder), params.points_global_spill_directory, "cli");
-    std::vector<std::string> input_file_names;
+    // any registered recording kind, opened with its default options (the GUI lets the user choose them)
+    const std::vector<fs::path> paths{ fs::path(folder) };
+    params.run_report = std::make_shared<RunReport>(recording_folder(paths), params.points_global_spill_directory, "cli");
     RunReport::Scope discovery(params.run_report.get(), RunReport::Stage::Loading);
 
-    bool loaded = false;
-    if (bag)
+    const auto kind = RecordingSourceFactory::find(paths);
+    if (!kind)
     {
-        BagSourceConfig config;
-        config.file = folder;
-        std::string error;
-        const auto source = open_bag_source(config, error);
-        discovery.finish();
-        if (!source)
-        {
-            std::cerr << "Cannot read '" << folder << "': " << error << std::endl;
-            return false;
-        }
-        InputFileSpans spans;
-        loaded = load_data(source, params, pointsPerFile, imu_data, spans);
-        if (loaded)
-            working_directory = source->workingDirectory().string();
+        std::cerr << "No recording kind reads '" << folder << "'" << std::endl;
+        return false;
     }
-    else
+    std::string error;
+    const auto source = kind->open(paths, error);
+    discovery.finish();
+    if (!source)
     {
-        for (const auto& entry : fs::directory_iterator(folder))
-        {
-            if (!entry.is_directory())
-            {
-                std::cout << entry.path() << std::endl;
-                input_file_names.push_back(entry.path().string());
-            }
-        }
-
-        discovery.finish();
-        loaded = load_data(input_file_names, params, pointsPerFile, imu_data, full_debug_messages);
-        if (loaded)
-            working_directory = fs::path(input_file_names[0]).parent_path().string();
+        std::cerr << "Cannot read '" << folder << "' as " << kind->name() << ": " << error << std::endl;
+        return false;
     }
-    if (loaded)
+    InputFileSpans spans;
+    if (load_data(source, params, pointsPerFile, imu_data, spans))
     {
+        working_directory = source->workingDirectory().string();
         calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
         if (!compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
             return false;
@@ -2426,18 +2430,10 @@ void display()
 
     view_kbd_shortcuts();
 
-    // Drag and drop: a Mandeye data folder, or any file in one, is processed like "Load & process scanning";
-    // a ROS1 bag or MCAP file opens its window first.
+    // Drag and drop: the dropped files and folders go to the recording kind that reads them (see openRecording)
     const auto dropped = takeDroppedFiles();
-    if (!dropped.empty() && !loRunning && !pipelinePending && is_bag_file(dropped[0]) && fs::is_regular_file(dropped[0]))
-        openBag(dropped[0]);
-    else if (!dropped.empty() && !loRunning && !pipelinePending)
-    {
-        fs::path folder(dropped[0]);
-        if (!fs::is_directory(folder))
-            folder = folder.parent_path();
-        openData(folder.string());
-    }
+    if (!dropped.empty() && !loRunning && !pipelinePending)
+        openRecording(std::vector<fs::path>(dropped.begin(), dropped.end()));
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false) && !loRunning && !pipelinePending)
     {
@@ -2650,10 +2646,11 @@ void display()
                     "Select folder from where to load data and start processing (" SHORTCUT_CTRL "+O), or drop the folder on the window");
 
             ImGui::SameLine();
-            if (ImGui::Button("Load & process ROS bag / MCAP"))
-                openBag();
+            if (ImGui::Button("Load & process recording files"))
+                openRecordingFiles();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Select a ROS1 bag (*.bag) or an MCAP file (*.mcap), choose its topics and start processing");
+                ImGui::SetTooltip(
+                    "Select the files of a recording (e.g. a ROS1 bag or an MCAP file), set its options and start processing");
 
             ImGui::SameLine();
             ImGui::Dummy(ImVec2(20, 0));
@@ -2823,8 +2820,8 @@ void display()
         settings_gui();
     }
 
-    if (!loRunning && bag_config_ui)
-        bag_source_window();
+    if (!loRunning && source_config_ui)
+        source_config_window();
 
     if (loRunning)
         progress_window();
@@ -2929,7 +2926,7 @@ int main(int argc, char* argv[])
         if (argc == 2) // running from command line
         {
             auto path = fs::path(argv[1]);
-            if (is_directory(path) || (is_bag_file(path) && fs::is_regular_file(path)))
+            if (RecordingSourceFactory::find({ path }))
             {
                 // results and failure reports go next to a bag file, or into the data folder
                 const fs::path input_dir = is_directory(path) ? path : path.parent_path();

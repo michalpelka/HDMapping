@@ -16,15 +16,16 @@ function(target_apply_hdmapping_profiler TARGET)
     endif()
 endfunction()
 
+include(${REPOSITORY_DIRECTORY}/recording_sources/recording_sources.cmake)
+
 # Source files
 set(SOURCES
   lidar_odometry_utils.h lidar_odometry_utils.cpp
   lidar_odometry_utils_optimizers.cpp
   lidar_odometry.cpp lidar_odometry.h
   points_global_spill.h points_global_spill.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/laz_csv_source.h ${REPOSITORY_DIRECTORY}/recording_sources/laz_csv_source.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/raw_cloud_loader.h ${REPOSITORY_DIRECTORY}/recording_sources/raw_cloud_loader.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/recording_source.h
+  ${RECORDING_SOURCE_CORE_FILES}
+  raw_cloud_loader.h raw_cloud_loader.cpp
   toml_io.h toml_io.cpp
 )
 
@@ -33,18 +34,9 @@ if(WIN32)
     list(APPEND SOURCES "resource.rc")
 endif()
 
-# ROS1 bag / MCAP recordings (bag_source): the rosbags readers. McapWriter.cpp holds the single MCAP_IMPLEMENTATION
-# that McapReader.cpp relies on.
-set(BAG_SOURCES
-  ${REPOSITORY_DIRECTORY}/recording_sources/bag_source.h ${REPOSITORY_DIRECTORY}/recording_sources/bag_source.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/bag_source_ui.h ${REPOSITORY_DIRECTORY}/recording_sources/bag_source_ui.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/McapReader.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/McapWriter.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.cpp
-)
 
 add_executable(
-  lidar_odometry_step_1 lidar_odometry_gui.cpp ${SOURCES} ${BAG_SOURCES}
+  lidar_odometry_step_1 lidar_odometry_gui.cpp ${SOURCES} ${RECORDING_SOURCE_FILES}
   )
 
 target_compile_definitions(lidar_odometry_step_1 PRIVATE WITH_GUI=1)
