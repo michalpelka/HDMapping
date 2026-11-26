@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 4.0.0)
 
 project(mandeye_raw_data_viewer)
 
+include(${REPOSITORY_DIRECTORY}/recording_sources/recording_sources.cmake)
+
 # Source files
 set(SOURCES
   mandeye_raw_data_viewer.cpp
@@ -10,13 +12,8 @@ set(SOURCES
   ../lidar_odometry_step_1/lidar_odometry_utils.cpp
   ../lidar_odometry_step_1/lidar_odometry_utils_optimizers.cpp
   ../lidar_odometry_step_1/points_global_spill.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/laz_csv_source.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/raw_cloud_loader.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/bag_source.cpp
-  ${REPOSITORY_DIRECTORY}/recording_sources/bag_source_ui.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/McapReader.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/McapWriter.cpp
-  ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.cpp
+  ${RECORDING_SOURCE_FILES}
+  ../lidar_odometry_step_1/raw_cloud_loader.cpp
 )
 
 # Windows: add resource file

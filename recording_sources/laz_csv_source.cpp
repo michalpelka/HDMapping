@@ -7,6 +7,24 @@
 
 namespace fs = std::filesystem;
 
+namespace
+{
+    bool is_mandeye_file(const fs::path& file)
+    {
+        std::string ext = file.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        return ext == ".laz" || ext == ".las" || ext == ".csv" || ext == ".json" || ext == ".mjc" || ext == ".sn";
+    }
+
+    void append_folder_files(const fs::path& folder, std::vector<std::string>& files)
+    {
+        std::error_code ec;
+        for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+            if (it->is_regular_file(ec))
+                files.push_back(it->path().string());
+    }
+} // namespace
+
 //! Time span and sample count of one IMU file's samples.
 static InputFileSpan imu_file_span(const std::string& file, const Imu& samples)
 {
@@ -314,3 +332,48 @@ void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) 
             imu_data.insert(imu_data.end(), std::make_move_iterator(chunk.begin()), std::make_move_iterator(chunk.end()));
     }
 }
+
+std::string LazCsvSource::name()
+{
+    return "Mandeye LAZ/CSV";
+}
+
+bool LazCsvSource::accepts(const std::vector<fs::path>& paths)
+{
+    for (const auto& path : paths)
+    {
+        std::error_code ec;
+        if (fs::is_directory(path, ec) || (fs::is_regular_file(path, ec) && is_mandeye_file(path)))
+            return true;
+    }
+    return false;
+}
+
+std::shared_ptr<RecordingSource> LazCsvSource::open(const std::vector<fs::path>& paths, std::string& error)
+{
+    std::vector<std::string> files;
+    std::error_code ec;
+    if (paths.size() == 1 && fs::is_regular_file(paths.front(), ec))
+        append_folder_files(paths.front().parent_path(), files); // one chunk is no recording: take its whole folder
+    else
+    {
+        for (const auto& path : paths)
+        {
+            if (fs::is_directory(path, ec))
+                append_folder_files(path, files);
+            else
+                files.push_back(path.string());
+        }
+    }
+    std::shared_ptr<RecordingSource> source = open(files, false);
+    if (!source)
+        error = "not a Mandeye recording: no LAZ and CSV files to pair, or the folder is missing";
+    return source;
+}
+
+std::vector<std::string> LazCsvSource::fileFilter()
+{
+    return { "Mandeye recording (*.laz *.las *.csv *.json *.mjc *.sn)", "*.laz *.las *.csv *.json *.mjc *.sn" };
+}
+
+HDMAPPING_REGISTER_RECORDING_SOURCE(LazCsvSource)
