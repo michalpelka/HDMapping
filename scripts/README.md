@@ -38,6 +38,14 @@
   python3 scripts/lio_to_tum.py /path/to/lio_result_0 trajectory.tum
   ```
 
+* `bag_loading_campaign.sh` (with `bag_loading_campaign.py`) — loading test campaign for ROS1 bags and MCAP files. Downloads public lidar + IMU recordings from Hugging Face and Zenodo, writes each in every format step 1 reads (MCAP none/lz4/zstd, ROS1 bag none/bz2/lz4, a recording split into several files), times `lidar_odometry_step_1` loading each one and checks that all variants load the same points and IMU samples. Runs in bash on Linux, macOS and MSYS2 (on Windows with the python.org Python); keeps its Python environment, downloads (about 2.8 GB, 9 GB with `--large`) and results in `~/hdmapping_bag_campaign`:
+
+  ```
+  scripts/bag_loading_campaign.sh --list
+  scripts/bag_loading_campaign.sh --step1 build/bin/lidar_odometry_step_1
+  scripts/bag_loading_campaign.sh run --variants ros1_bz2 mcap_zstd
+  ```
+
 * `lio_ate.py` — absolute trajectory error of a TUM trajectory against a golden one: poses paired in order with timestamps within `--max-dt-s` (default 10 µs), position RMSE without alignment. Exits 0 when the RMSE is within `--max-ate-m` (default 0.001 m), 1 when it is not, 2 when the poses or timestamps differ. Standard library only:
 
   ```
