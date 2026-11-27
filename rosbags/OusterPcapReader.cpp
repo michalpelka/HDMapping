@@ -1,14 +1,13 @@
 #include "OusterPcapReader.h"
+#include "PcapUdpReader.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <fstream>
 #include <map>
 #include <numbers>
-#include <tuple>
 
 namespace rosbags
 {
@@ -46,23 +45,6 @@ constexpr KnownProfile kKnownProfiles[] = {
 	{"RNG19_RFL8_SIG16_NIR16_R16_G16_B16", 20, true},
 };
 
-// pcap link-layer types handled by linkPayload().
-constexpr uint32_t kLinkNull = 0;
-constexpr uint32_t kLinkEthernet = 1;
-constexpr uint32_t kLinkRaw = 101;
-constexpr uint32_t kLinkLoop = 108;
-constexpr uint32_t kLinkLinuxSll = 113;
-constexpr uint32_t kLinkIpv4 = 228;
-constexpr uint32_t kLinkLinuxSll2 = 276;
-
-// Anything bigger is a corrupt record header, not a packet: the largest Ouster
-// lidar packet is ~33 kB and a reassembled IPv4 datagram is at most 64 kB.
-constexpr uint32_t kMaxRecordBytes = 256 * 1024;
-// Datagrams being reassembled at once; Ouster streams interleave at most a
-// lidar and an IMU datagram, so anything beyond this is fragments whose
-// siblings were never captured.
-constexpr size_t kMaxPendingDatagrams = 64;
-
 uint16_t le16(const uint8_t* p)
 {
 	return static_cast<uint16_t>(p[0] | (p[1] << 8));
@@ -83,21 +65,6 @@ float leFloat(const uint8_t* p)
 	float v;
 	std::memcpy(&v, &bits, sizeof(v));
 	return v;
-}
-
-uint16_t be16(const uint8_t* p)
-{
-	return static_cast<uint16_t>((p[0] << 8) | p[1]);
-}
-
-uint32_t be32(const uint8_t* p)
-{
-	return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) | (static_cast<uint32_t>(p[2]) << 8) | p[3];
-}
-
-uint32_t swap32(uint32_t v)
-{
-	return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) | ((v >> 8) & 0xFF00) | (v >> 24);
 }
 
 // Little-endian bit field of a channel data block, as pixel_data_format
@@ -355,11 +322,8 @@ struct OusterPcapReader::Impl
 	bool stop = false;
 	bool have_lidar_timestamp = false;
 
-	std::ifstream in;
-	std::vector<char> buffer;
-	bool swapped = false;
-	bool nanoseconds = false;
-	uint32_t linktype = 0;
+	std::unique_ptr<PcapUdpReader> pcap;
+	uint64_t unrelated_datagrams = 0; // UDP on a port that is neither lidar nor IMU, or too short
 
 	uint64_t prod_sn = 0;
 	bool check_sn = false;
@@ -371,17 +335,6 @@ struct OusterPcapReader::Impl
 	std::vector<double> lut_offset;
 	std::array<double, 9> imu_rotation{};
 
-	struct PendingDatagram
-	{
-		std::map<uint32_t, std::vector<uint8_t>> parts; // byte offset -> payload
-		uint32_t total = 0; // known once the last fragment arrives
-		uint64_t age = 0;
-	};
-	std::map<std::tuple<uint32_t, uint32_t, uint16_t>, PendingDatagram> pending;
-	uint64_t pending_clock = 0;
-
-	std::vector<uint8_t> record;
-	std::vector<uint8_t> datagram;
 	std::vector<McapPoint> points;
 	std::vector<std::array<uint16_t, 3>> rgb;
 
@@ -390,7 +343,7 @@ struct OusterPcapReader::Impl
 		if(error.empty())
 			error = std::move(message);
 		// Release the file: a rejected capture must not stay locked (Windows) for the reader's lifetime.
-		in.close();
+		pcap.reset();
 		open = false;
 		return false;
 	}
@@ -432,70 +385,28 @@ struct OusterPcapReader::Impl
 		}
 	}
 
-	uint32_t u32(const uint8_t* p) const
+	void handleDatagram(const UdpDatagram& udp)
 	{
-		uint32_t v;
-		std::memcpy(&v, p, sizeof(v));
-		return swapped ? swap32(v) : v;
-	}
-
-	// Locates the IPv4 header inside a captured frame. Returns false for anything
-	// that is not IPv4 (ARP, IPv6, ...).
-	bool linkPayload(const uint8_t* frame, size_t size, size_t& ip_offset) const
-	{
-		switch(linktype)
-		{
-		case kLinkEthernet:
-		{
-			size_t off = 12;
-			if(size < off + 2)
-				return false;
-			uint16_t ethertype = be16(frame + off);
-			while(ethertype == 0x8100 || ethertype == 0x88A8 || ethertype == 0x9100) // VLAN / QinQ tags
-			{
-				off += 4;
-				if(size < off + 2)
-					return false;
-				ethertype = be16(frame + off);
-			}
-			ip_offset = off + 2;
-			return ethertype == 0x0800;
-		}
-		case kLinkLinuxSll:
-			ip_offset = 16;
-			return size >= 16 && be16(frame + 14) == 0x0800;
-		case kLinkLinuxSll2:
-			ip_offset = 20;
-			return size >= 20 && be16(frame) == 0x0800;
-		case kLinkNull:
-		case kLinkLoop:
-			ip_offset = 4;
-			return size >= 4 && (u32(frame) == 2 || swap32(u32(frame)) == 2); // AF_INET, host order of the capturing machine
-		default: // kLinkRaw, kLinkIpv4
-			ip_offset = 0;
-			return size >= 1 && (frame[0] >> 4) == 4;
-		}
-	}
-
-	void handleUdp(const uint8_t* udp, size_t size)
-	{
-		if(size < 8)
-		{
-			++stats.other_packets;
-			return;
-		}
-		const uint16_t dport = be16(udp + 2);
-		const size_t length = std::min<size_t>(std::max<size_t>(be16(udp + 4), 8), size) - 8;
-		const uint8_t* payload = udp + 8;
-
-		if(dport == options.lidar_port)
-			handleLidar(payload, length);
-		else if(dport == options.imu_port && meta.udp_profile_imu == "LEGACY")
-			handleLegacyImu(payload, length);
-		else if(dport == options.imu_port && meta.udp_profile_imu == "ACCEL32_GYRO32_NMEA")
-			handleAccel32Gyro32NmeaImu(payload, length);
+		if(udp.dst_port == options.lidar_port)
+			handleLidar(udp.payload, udp.size);
+		else if(udp.dst_port == options.imu_port && meta.udp_profile_imu == "LEGACY")
+			handleLegacyImu(udp.payload, udp.size);
+		else if(udp.dst_port == options.imu_port && meta.udp_profile_imu == "ACCEL32_GYRO32_NMEA")
+			handleAccel32Gyro32NmeaImu(udp.payload, udp.size);
 		else
-			++stats.other_packets;
+			++unrelated_datagrams;
+		syncPcapStats();
+	}
+
+	// The capture-level counters come from the pcap reader.
+	void syncPcapStats()
+	{
+		const PcapUdpStats& p = pcap->stats();
+		stats.bytes_read = p.bytes_read;
+		stats.records = p.records;
+		stats.other_packets = p.non_udp + unrelated_datagrams;
+		stats.reassembled_datagrams = p.reassembled_datagrams;
+		stats.dropped_fragments = p.dropped_fragments;
 	}
 
 	// Packet header init_id / serial number differ from the metadata's.
@@ -649,85 +560,6 @@ struct OusterPcapReader::Impl
 		}
 	}
 
-	// Feeds one IPv4 fragment in; once every byte of its datagram has arrived,
-	// hands the reassembled UDP datagram on and forgets it.
-	void handleFragment(const uint8_t* ip, size_t ihl, size_t ip_length)
-	{
-		const auto key = std::make_tuple(be32(ip + 12), be32(ip + 16), be16(ip + 4));
-		const uint16_t flags_offset = be16(ip + 6);
-		const bool more_fragments = (flags_offset & 0x2000) != 0;
-		const uint32_t offset = static_cast<uint32_t>(flags_offset & 0x1FFF) * 8;
-		const size_t length = ip_length - ihl;
-
-		auto [it, inserted] = pending.try_emplace(key);
-		PendingDatagram& d = it->second;
-		if(inserted)
-			d.age = pending_clock++;
-		d.parts[offset].assign(ip + ihl, ip + ihl + length);
-		if(!more_fragments)
-			d.total = offset + static_cast<uint32_t>(length);
-
-		if(d.total != 0)
-		{
-			uint32_t covered = 0;
-			for(const auto& [part_offset, bytes] : d.parts)
-			{
-				if(part_offset > covered)
-					break; // hole
-				covered = std::max<uint32_t>(covered, part_offset + static_cast<uint32_t>(bytes.size()));
-			}
-			if(covered >= d.total)
-			{
-				datagram.assign(d.total, 0);
-				for(const auto& [part_offset, bytes] : d.parts)
-				{
-					if(part_offset >= d.total)
-						break;
-					std::memcpy(datagram.data() + part_offset, bytes.data(), std::min<size_t>(bytes.size(), d.total - part_offset));
-				}
-				pending.erase(it);
-				++stats.reassembled_datagrams;
-				handleUdp(datagram.data(), datagram.size());
-				return;
-			}
-		}
-
-		if(pending.size() > kMaxPendingDatagrams)
-		{
-			auto oldest = std::min_element(
-				pending.begin(),
-				pending.end(),
-				[](const auto& a, const auto& b)
-				{
-					return a.second.age < b.second.age;
-				});
-			stats.dropped_fragments += oldest->second.parts.size();
-			pending.erase(oldest);
-		}
-	}
-
-	void handleFrame(const uint8_t* frame, size_t size)
-	{
-		size_t off = 0;
-		if(!linkPayload(frame, size, off) || size < off + 20)
-		{
-			++stats.other_packets;
-			return;
-		}
-		const uint8_t* ip = frame + off;
-		const size_t ihl = static_cast<size_t>(ip[0] & 0x0F) * 4;
-		const size_t ip_length = std::min<size_t>(be16(ip + 2), size - off);
-		if((ip[0] >> 4) != 4 || ihl < 20 || ip_length < ihl || ip[9] != 17 /* UDP */)
-		{
-			++stats.other_packets;
-			return;
-		}
-		if((be16(ip + 6) & 0x3FFF) != 0) // more-fragments flag or a non-zero offset
-			handleFragment(ip, ihl, ip_length);
-		else
-			handleUdp(ip + ihl, ip_length - ihl);
-	}
-
 	decltype(Callbacks::onPoints) onPoints;
 	std::function<void(const McapImuSample&)> onImu;
 };
@@ -760,56 +592,10 @@ OusterPcapReader::OusterPcapReader(const std::filesystem::path& pcap_path, const
 	d.imu_rotation = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
 	d.buildLut();
 
-	d.buffer.resize(1 << 20);
-	d.in.rdbuf()->pubsetbuf(d.buffer.data(), static_cast<std::streamsize>(d.buffer.size()));
-	d.in.open(pcap_path, std::ios::binary);
-	if(!d.in.is_open())
+	d.pcap = std::make_unique<PcapUdpReader>(pcap_path);
+	if(!d.pcap->isOpen())
 	{
-		d.fail("cannot open " + pcap_path.string());
-		return;
-	}
-
-	uint8_t header[24];
-	if(!d.in.read(reinterpret_cast<char*>(header), sizeof(header)))
-	{
-		d.fail(pcap_path.string() + " is too short to be a pcap file");
-		return;
-	}
-	uint32_t magic;
-	std::memcpy(&magic, header, sizeof(magic));
-	switch(magic)
-	{
-	case 0xA1B2C3D4:
-		break;
-	case 0xA1B23C4D:
-		d.nanoseconds = true;
-		break;
-	case 0xD4C3B2A1:
-		d.swapped = true;
-		break;
-	case 0x4D3CB2A1:
-		d.swapped = d.nanoseconds = true;
-		break;
-	case 0x0A0D0D0A:
-		d.fail(pcap_path.string() + " is pcapng, which is not supported -- convert it with: editcap -F pcap in.pcapng out.pcap");
-		return;
-	default:
-		d.fail(pcap_path.string() + " is not a pcap file");
-		return;
-	}
-	d.linktype = d.u32(header + 20) & 0x0FFFFFFF; // upper bits: FCS length flags
-	switch(d.linktype)
-	{
-	case kLinkNull:
-	case kLinkEthernet:
-	case kLinkRaw:
-	case kLinkLoop:
-	case kLinkLinuxSll:
-	case kLinkIpv4:
-	case kLinkLinuxSll2:
-		break;
-	default:
-		d.fail("unsupported pcap link type " + std::to_string(d.linktype));
+		d.fail(d.pcap->error());
 		return;
 	}
 
@@ -845,25 +631,19 @@ bool OusterPcapReader::read(const Callbacks& callbacks)
 		return false;
 	d.onPoints = callbacks.onPoints;
 	d.onImu = callbacks.onImu;
+	if(d.stop)
+		return true;
 
-	uint8_t record_header[16];
-	while(!d.stop)
-	{
-		if(!d.in.read(reinterpret_cast<char*>(record_header), sizeof(record_header)))
-			break; // end of file; a torn final header (capture killed mid-write) ends it too
-		const uint32_t captured = d.u32(record_header + 8);
-		if(captured > kMaxRecordBytes)
-			return d.fail("corrupt pcap record #" + std::to_string(d.stats.records + 1) + ": " + std::to_string(captured) + " bytes");
-		d.record.resize(captured);
-		if(!d.in.read(reinterpret_cast<char*>(d.record.data()), captured))
-			break; // torn final record
-		++d.stats.records;
-		d.stats.bytes_read += sizeof(record_header) + captured;
-		d.handleFrame(d.record.data(), d.record.size());
-	}
-	for(const auto& [key, datagram] : d.pending)
-		d.stats.dropped_fragments += datagram.parts.size();
-	d.pending.clear();
+	const bool ok = d.pcap->read(
+		[&d](const UdpDatagram& udp)
+		{
+			d.handleDatagram(udp);
+			if(d.stop)
+				d.pcap->requestStop();
+		});
+	d.syncPcapStats();
+	if(!ok)
+		return d.fail(d.pcap->error());
 	return true;
 }
 

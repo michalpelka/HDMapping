@@ -10,6 +10,8 @@ add_executable(hdmapping_rosbags_tests
     test_mcap_writer.cpp
     test_mcap_reader.cpp
     test_ouster_pcap_reader.cpp
+    test_pcap_udp_reader.cpp
+    pcap_test_frames.h
     test_ros1_bag.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../McapWriter.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../McapWriter.cpp
@@ -19,6 +21,8 @@ add_executable(hdmapping_rosbags_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../MandeyeSessionWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../OusterPcapReader.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../OusterPcapReader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../PcapUdpReader.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../PcapUdpReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Ros1Bag.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../Ros1Bag.cpp
 )
@@ -30,7 +34,7 @@ target_include_directories(hdmapping_rosbags_tests PRIVATE
     ${THIRDPARTY_DIRECTORY}/json/include
 )
 
-target_link_libraries(hdmapping_rosbags_tests PRIVATE mcap ros1bag_compression ${PLATFORM_LASZIP_LIB})
+target_link_libraries(hdmapping_rosbags_tests PRIVATE mcap ros1bag_compression hdmapping_zstd ${PLATFORM_LASZIP_LIB})
 
 if (MSVC)
     target_compile_definitions(hdmapping_rosbags_tests PRIVATE _USE_MATH_DEFINES)

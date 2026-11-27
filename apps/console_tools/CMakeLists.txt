@@ -184,6 +184,7 @@ endif()
 add_executable(
         ouster_pcap_to_laz ouster_pcap_to_laz.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/OusterPcapReader.h ${REPOSITORY_DIRECTORY}/rosbags/OusterPcapReader.cpp
+        ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.h ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.cpp
 )
 
@@ -197,12 +198,36 @@ target_link_libraries(
         ouster_pcap_to_laz
         PRIVATE
         spdlog::spdlog
+        hdmapping_zstd
         ${PLATFORM_LASZIP_LIB}
         ${PLATFORM_MISCELLANEOUS_LIBS})
 
 if (MSVC)
     target_compile_options(laz_to_mcap PRIVATE /bigobj)
 endif()
+
+# hesai_pcap_to_laz: Hesai pcap (or a lidar_recorder session of .pcap.zst chunks) -> mandeye session directory.
+# Same writer and chunking as mcap_to_laz; the packets are decoded by the Hesai LiDAR SDK (3rdparty/HesaiLidar_SDK_2.0).
+add_executable(
+        hesai_pcap_to_laz hesai_pcap_to_laz.cpp
+        ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.h ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.cpp
+        ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.cpp
+        ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.cpp
+)
+
+target_include_directories(
+        hesai_pcap_to_laz
+        PRIVATE ${REPOSITORY_DIRECTORY}/rosbags
+        ${LASZIP_INCLUDE_DIR}/LASzip/include)
+
+target_link_libraries(
+        hesai_pcap_to_laz
+        PRIVATE
+        hesai_sdk
+        hdmapping_zstd
+        spdlog::spdlog
+        ${PLATFORM_LASZIP_LIB}
+        ${PLATFORM_MISCELLANEOUS_LIBS})
 
 # bow_loop_closure_detect: headless verification tool for the automatic
 # image-based (fbow) loop closure detector shared with step 2's GUI --
@@ -336,5 +361,6 @@ hdmapping_install_app(
   laz_to_mcap
   mcap_to_laz
   ouster_pcap_to_laz
+  hesai_pcap_to_laz
   session_intensity_panoramas
   session_to_mcap)
