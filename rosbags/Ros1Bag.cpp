@@ -505,6 +505,21 @@ bool Ros1BagReader::parseRecords(const uint8_t* data, size_t size, const Message
 	return true;
 }
 
+std::string Ros1BagReader::chunkCompression()
+{
+	if(!isOpen() || chunks_.empty())
+		return {};
+	file_.clear();
+	file_.seekg(static_cast<std::streamoff>(chunks_.front().pos));
+	HeaderFields header;
+	std::vector<uint8_t> data;
+	std::string error;
+	if(!readRecord(file_, header, data, error))
+		return {};
+	const auto compression = header.find("compression");
+	return compression == header.end() ? std::string{} : compression->second;
+}
+
 std::optional<LogTimeRange> Ros1BagReader::recordTimeSpan() const
 {
 	if(chunks_.empty())
@@ -1081,6 +1096,11 @@ std::optional<LogTimeRange> Ros1BagFileReader::logTimeSpan() const
 	return reader_.recordTimeSpan();
 }
 
+std::string Ros1BagFileReader::compression()
+{
+	return reader_.chunkCompression();
+}
+
 bool Ros1BagFileReader::read(const Callbacks& callbacks, const LogTimeRange& range)
 {
 	if(!open_)
@@ -1090,6 +1110,8 @@ bool Ros1BagFileReader::read(const Callbacks& callbacks, const LogTimeRange& ran
 	const bool ok = reader_.forEachMessage(
 		[&](const Ros1Connection& c, uint64_t time_ns, const uint8_t* data, size_t size)
 		{
+			if(callbacks.onProgress)
+				callbacks.onProgress(time_ns);
 			if(c.topic == topics_.lidar && callbacks.onPointCloud)
 			{
 				std::vector<McapPoint> points;

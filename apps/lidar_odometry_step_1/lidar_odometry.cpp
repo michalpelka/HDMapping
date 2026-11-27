@@ -1,4 +1,5 @@
 #include "lidar_odometry.h"
+#include "../console_tools/console_progress.h"
 #include "hdmapping_profiler.hpp"
 #include "laz_csv_source.h"
 #include "raw_cloud_loader.h"
@@ -122,7 +123,28 @@ static bool load_from_source(
     InputFileSpans& fileSpans)
 {
     const fs::path working_directory = source->workingDirectory();
-    source->loadImu(imu_data, fileSpans.imu);
+    LoadProgress* progress = params.load_progress.get();
+    if (progress)
+    {
+        progress->imu = 0.0;
+        progress->chunks_done = 0;
+        progress->chunks_total = 0;
+    }
+    // a long read (a compressed bag) logs its progress in per mille, so the console shows it is still going
+    constexpr uint64_t kImuSteps = 1000;
+    ConsoleProgress imu_console("IMU data", kImuSteps);
+    source->loadImu(
+        imu_data,
+        fileSpans.imu,
+        [&](double fraction)
+        {
+            if (progress)
+                progress->imu = fraction;
+            imu_console.update(static_cast<uint64_t>(fraction * kImuSteps));
+        });
+    if (progress)
+        progress->imu = 1.0;
+    std::cout << "IMU samples: " << imu_data.size() << std::endl;
 
     // Sort once after merging
     std::sort(
@@ -144,6 +166,16 @@ static bool load_from_source(
     pointsPerFile.resize(minSize);
     // the first file's points are dropped unless params.skip_first_file is off
     const size_t firstUsedFile = params.skip_first_file ? 1 : 0;
+
+    std::atomic<size_t> chunks_done{ 0 };
+    const ConsoleProgress chunks_console("Point clouds", minSize);
+    const auto chunk_loaded = [&](size_t i)
+    {
+        const size_t done = ++chunks_done;
+        if (progress)
+            progress->chunks_done = done;
+        spdlog::info("{} loaded ({})", source->chunkName(i), chunks_console.status(done));
+    };
 
     // --- Working directories
 
@@ -177,6 +209,10 @@ static bool load_from_source(
         L.loaded.assign(minSize, 0);
         L.done.assign(minSize, 0);
         std::vector<std::vector<LidarGap>> gaps_in_file(minSize);
+        // a skipped file's cloud is never read: it counts as done
+        chunks_done = std::min(firstUsedFile, minSize);
+        if (progress)
+            progress->chunks_total = minSize;
         tbb::parallel_for(
             std::min(firstUsedFile, minSize), // a skipped file's cloud is never used
             minSize,
@@ -184,6 +220,7 @@ static bool load_from_source(
             {
                 L.stamp[i] = source->stamp(i);
                 auto data = source->loadPoints(i, filter);
+                chunk_loaded(i);
                 L.n[i] = data.size();
                 if (!data.empty())
                 {
@@ -208,12 +245,15 @@ static bool load_from_source(
     std::vector<std::vector<LidarGap>> gaps_in_file(minSize);
     std::vector<double> t_first(minSize, 0.0);
     std::vector<double> t_last(minSize, 0.0);
+    if (progress)
+        progress->chunks_total = minSize;
     tbb::parallel_for(
         size_t(0),
         minSize,
         [&](size_t i)
         {
             auto data = source->loadPoints(i, filter);
+            chunk_loaded(i);
 
             // Optional calibration validation (first file only)
             if ((i == 0) && params.save_calibration_validation)

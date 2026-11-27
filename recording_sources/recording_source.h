@@ -2,8 +2,10 @@
 
 #include "lidar_odometry_utils.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -36,6 +38,14 @@ struct ChunkStamp
     std::filesystem::file_time_type time{};
 };
 
+//! Progress of load_data, written by the loading threads and read by a GUI.
+struct LoadProgress
+{
+    std::atomic<double> imu{ 0.0 }; //!< fraction of the IMU data read, 0 to 1
+    std::atomic<size_t> chunks_done{ 0 }; //!< point chunks read
+    std::atomic<size_t> chunks_total{ 0 }; //!< point chunks to read; 0 until the IMU data is read
+};
+
 //! A recording as step 1 reads it: an IMU stream plus raw LiDAR points split into time-ordered chunks.
 //! load_data() and the lazy raw cloud loader read input data only through this interface.
 class RecordingSource
@@ -53,6 +63,7 @@ public:
     virtual std::vector<Point3Di> loadPoints(size_t i, const PointFilter& filter) const = 0;
     //! Current state of chunk i's backing data.
     virtual ChunkStamp stamp(size_t i) const = 0;
-    //! Appends every IMU sample, unsorted, to imu_data; imuSpans receives one span per IMU input file.
-    virtual void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) const = 0;
+    //! Appends every IMU sample, unsorted, to imu_data; imuSpans receives one span per IMU input file. Calls progress
+    //! with the fraction read so far (0 to 1) when reading takes long enough to report.
+    virtual void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>& progress) const = 0;
 };

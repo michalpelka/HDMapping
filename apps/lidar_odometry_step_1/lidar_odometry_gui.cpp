@@ -223,6 +223,24 @@ static fs::path recording_folder(const std::vector<fs::path>& paths)
     return fs::is_directory(paths.front()) ? paths.front() : paths.front().parent_path();
 }
 
+//! Progress bars of load_data: the IMU read, then the point chunks.
+static void load_progress_gui()
+{
+    const auto progress = params.load_progress;
+    if (!progress)
+        return;
+    const float imu = static_cast<float>(progress->imu.load());
+    char text[64];
+    std::snprintf(text, sizeof(text), "IMU data %.0f %%", imu * 100.0f);
+    ImGui::ProgressBar(imu, ImVec2(400.0f, 0.0f), text);
+    const size_t total = progress->chunks_total.load();
+    if (total == 0)
+        return;
+    const size_t done = std::min(progress->chunks_done.load(), total);
+    std::snprintf(text, sizeof(text), "Point clouds %zu / %zu", done, total);
+    ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total), ImVec2(400.0f, 0.0f), text);
+}
+
 static void resources_gui()
 {
     if (!params.run_report || !ImGui::CollapsingHeader("Resources", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1991,6 +2009,7 @@ static void launchPipeline(const std::string& folder, bool compute, bool save)
         if (params.run_report && !params.working_directory_cache.empty())
             remove_cache(params);
         params.run_report = std::make_shared<RunReport>(folder, params.points_global_spill_directory, "gui");
+        params.load_progress = std::make_shared<LoadProgress>();
         step_1_done = step_2_done = false;
         calculations_failed = false;
         pendingLoadFolder = folder;
@@ -2227,6 +2246,7 @@ void display()
         if (ImGui::SmallButton("Controls / Help (F1)"))
             info_gui = true;
         ImGui::Text("Loading and preparing: %s", pendingLoadFolder.c_str());
+        load_progress_gui();
         recording_span_gui();
         resources_gui();
         ImGui::End();

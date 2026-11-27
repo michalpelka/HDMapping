@@ -119,6 +119,8 @@ public:
 		std::function<void(uint64_t log_time_ns, std::vector<McapPoint>&&)> onPointCloud;
 		std::function<void(const McapImuSample&)> onImu;
 		std::function<void(uint64_t log_time_ns, const std::string&)> onSn;
+		// Called with the log time of every message read, before it is decoded; for progress reports.
+		std::function<void(uint64_t log_time_ns)> onProgress;
 	};
 
 	// Streams the messages whose log time lies in `range` (by default the whole

@@ -252,20 +252,43 @@ ChunkStamp BagSource<Reader>::stamp(size_t i) const
 }
 
 template<typename Reader>
-void BagSource<Reader>::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) const
+void BagSource<Reader>::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>& progress) const
 {
-    const rosbags::ImuTransform transform = imu_transform(config_);
-    for (const auto& file : config_.files)
+    // progress is the share of the files' log time read: the IMU messages are spread over the whole recording
+    std::vector<uint64_t> file_start(config_.files.size(), 0), file_end(config_.files.size(), 0);
+    for (const Window& w : windows_)
     {
+        if (w.index == 0)
+            file_start[w.file] = w.start_ns;
+        file_end[w.file] = w.end_ns;
+    }
+    uint64_t total_ns = 0;
+    for (size_t f = 0; f < config_.files.size(); ++f)
+        total_ns += file_end[f] - file_start[f];
+    uint64_t done_ns = 0;
+
+    const rosbags::ImuTransform transform = imu_transform(config_);
+    for (size_t f = 0; f < config_.files.size(); ++f)
+    {
+        const fs::path& file = config_.files[f];
         std::cout << "loading IMU data from '" << file.string() << "' ..\n";
         Reader reader(file, reader_options(config_));
         if (!reader.isOpen())
         {
             std::cerr << "cannot open '" << file.string() << "': " << reader.error() << "\n";
+            done_ns += file_end[f] - file_start[f];
             continue;
         }
         const size_t first = imu_data.size();
         typename Reader::Callbacks callbacks;
+        if (progress && total_ns > 0)
+        {
+            callbacks.onProgress = [&, f](uint64_t log_time_ns)
+            {
+                const uint64_t in_file = std::clamp(log_time_ns, file_start[f], file_end[f]) - file_start[f];
+                progress(static_cast<double>(done_ns + in_file) / static_cast<double>(total_ns));
+            };
+        }
         callbacks.onImu = [&](rosbags::McapImuSample s)
         {
             rosbags::applyImuTransform(transform, s);
@@ -274,6 +297,9 @@ void BagSource<Reader>::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSp
         };
         if (!reader.read(callbacks))
             std::cerr << "reading IMU from '" << file.string() << "' failed: " << reader.error() << "\n";
+        done_ns += file_end[f] - file_start[f];
+        if (progress && total_ns > 0)
+            progress(static_cast<double>(done_ns) / static_cast<double>(total_ns));
 
         InputFileSpan span{ file.string() };
         for (size_t k = first; k < imu_data.size(); ++k)
@@ -428,6 +454,30 @@ namespace
     }
 } // namespace
 
+std::string bag_compression_hint(const std::vector<fs::path>& files)
+{
+    size_t bz2 = 0;
+    fs::path example;
+    for (const auto& file : files)
+    {
+        if (!is_ros1_bag(file))
+            continue;
+        rosbags::Ros1BagReader reader(file);
+        if (reader.isOpen() && reader.chunkCompression() == "bz2")
+        {
+            if (bz2++ == 0)
+                example = file;
+        }
+    }
+    if (bz2 == 0)
+        return {};
+    const std::string which = bz2 == 1 ? "'" + example.filename().string() + "' is" : std::to_string(bz2) + " of the bags are";
+    return which +
+        " bz2-compressed, which loads much slower than an uncompressed bag. For faster loading, decompress it first: "
+        "rosbag decompress " +
+        example.filename().string();
+}
+
 std::vector<BagChannel> list_bag_channels(const fs::path& file, std::string& error)
 {
     error.clear();
@@ -460,6 +510,8 @@ std::shared_ptr<RecordingSource> open_bag_source(const BagSourceConfig& config, 
         error = "chunk length must not be negative";
         return nullptr;
     }
+    if (const std::string hint = bag_compression_hint(config.files); !hint.empty())
+        std::cerr << "WARNING: " << hint << std::endl;
     return is_ros1_bag(config.files.front()) ? open_with<rosbags::Ros1BagFileReader>(config, error)
                                              : open_with<rosbags::McapFileReader>(config, error);
 }

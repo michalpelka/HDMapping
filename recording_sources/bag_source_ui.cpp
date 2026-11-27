@@ -72,6 +72,7 @@ BagSourceConfigUi::BagSourceConfigUi(const std::vector<std::filesystem::path>& f
         return;
     }
     channels_ = list_bag_channels(files.front(), list_error_);
+    compression_hint_ = bag_compression_hint(files);
     config_.lidar_topic = only_topic(channels_, BagChannel::Kind::Lidar);
     config_.imu_topic = only_topic(channels_, BagChannel::Kind::Imu);
 }
@@ -95,6 +96,13 @@ bool BagSourceConfigUi::draw()
     {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", list_error_.c_str());
         return false;
+    }
+
+    if (!compression_hint_.empty())
+    {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", compression_hint_.c_str());
+        ImGui::PopTextWrapPos();
     }
 
     topic_combo("LiDAR topic", channels_, BagChannel::Kind::Lidar, config_.lidar_topic);
