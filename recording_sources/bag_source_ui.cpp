@@ -63,17 +63,34 @@ namespace
     }
 } // namespace
 
-BagSourceConfigUi::BagSourceConfigUi(const std::filesystem::path& file)
+BagSourceConfigUi::BagSourceConfigUi(const std::vector<std::filesystem::path>& files)
 {
-    config_.file = file;
-    channels_ = list_bag_channels(file, list_error_);
+    config_.files = files;
+    if (files.empty())
+    {
+        list_error_ = "no .bag or .mcap file";
+        return;
+    }
+    channels_ = list_bag_channels(files.front(), list_error_);
     config_.lidar_topic = only_topic(channels_, BagChannel::Kind::Lidar);
     config_.imu_topic = only_topic(channels_, BagChannel::Kind::Imu);
 }
 
 bool BagSourceConfigUi::draw()
 {
-    ImGui::TextUnformatted(config_.file.filename().string().c_str());
+    if (config_.files.size() == 1)
+        ImGui::TextUnformatted(config_.files.front().filename().string().c_str());
+    else if (!config_.files.empty())
+    {
+        ImGui::Text("%zu files, topics from %s", config_.files.size(), config_.files.front().filename().string().c_str());
+        if (ImGui::IsItemHovered())
+        {
+            std::string list;
+            for (const auto& file : config_.files)
+                list += file.string() + "\n";
+            ImGui::SetTooltip("%s", list.c_str());
+        }
+    }
     if (!list_error_.empty())
     {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", list_error_.c_str());
