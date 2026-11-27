@@ -49,8 +49,7 @@ target_include_directories(
 target_link_libraries(
   mandeye_raw_data_viewer
   PRIVATE
-  mcap
-  ros1bag_compression
+  ${RECORDING_SOURCE_LIBRARIES}
   step1_run_report
   # core_raylib_utils brings in core_raylib (core, raylib), raylib_widgets and rlImGui.
   core_raylib_utils

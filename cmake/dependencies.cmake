@@ -379,28 +379,27 @@ else()
     target_link_libraries(ros1bag_compression INTERFACE BZip2::BZip2)
 endif()
 
-# Hesai LiDAR SDK 2.0 (hesai_pcap_to_laz): decodes Hesai point and IMU packets with the lidar's angle correction.
-# Built without PTCS (TLS to a live sensor, which needs OpenSSL): reading captures needs no connection. The SDK
-# supports Linux and Windows; on macOS cmake/hesai_macos_compat supplies <endian.h> and the Linux serial ioctls it
-# names, force-included into the SDK and, through the hesai_sdk target, into the files that use it.
-if(BUILD_WITH_CLI_TOOLS)
-    set(WITH_PTCS_USE OFF CACHE BOOL "Hesai SDK: TLS connection to a live sensor (needs OpenSSL)" FORCE)
-    set(DISENABLE_TEST_CC ON CACHE BOOL "Hesai SDK: skip its sample programs" FORCE)
-    set(HESAI_SDK_DIRECTORY ${THIRDPARTY_DIRECTORY}/HesaiLidar_SDK_2.0)
-    if(APPLE)
-        set(HESAI_MACOS_COMPAT ${CMAKE_SOURCE_DIR}/cmake/hesai_macos_compat)
-        set(HESAI_MACOS_FLAGS -I${HESAI_MACOS_COMPAT} -include ${HESAI_MACOS_COMPAT}/hesai_macos_compat.h)
-    endif()
-    get_directory_property(_hesai_saved_compile_options COMPILE_OPTIONS)
-    add_compile_options(${HESAI_MACOS_FLAGS})
-    add_subdirectory(${HESAI_SDK_DIRECTORY} ${CMAKE_BINARY_DIR}/3rdparty/HesaiLidar_SDK_2.0 EXCLUDE_FROM_ALL)
-    set_directory_properties(PROPERTIES COMPILE_OPTIONS "${_hesai_saved_compile_options}")
-
-    add_library(hesai_sdk INTERFACE)
-    target_link_libraries(hesai_sdk INTERFACE hesai_sdk_lib)
-    target_include_directories(hesai_sdk INTERFACE ${HESAI_SDK_DIRECTORY}/driver ${HESAI_SDK_DIRECTORY}/libhesai ${HESAI_SDK_DIRECTORY})
-    target_compile_options(hesai_sdk INTERFACE ${HESAI_MACOS_FLAGS})
+# Hesai LiDAR SDK 2.0: decodes Hesai point and IMU packets with the lidar's angle correction (the Hesai pcap recording
+# source, hesai_pcap_to_laz). Built without PTCS (TLS to a live sensor, which needs OpenSSL): reading captures needs no
+# connection. The SDK supports Linux and Windows; on macOS cmake/hesai_macos_compat supplies <endian.h> and the Linux
+# serial ioctls it names. HESAI_MACOS_FLAGS force-includes them; files that include SDK headers get it as a source
+# property (it must not reach whole targets).
+set(WITH_PTCS_USE OFF CACHE BOOL "Hesai SDK: TLS connection to a live sensor (needs OpenSSL)" FORCE)
+set(DISENABLE_TEST_CC ON CACHE BOOL "Hesai SDK: skip its sample programs" FORCE)
+set(HESAI_SDK_DIRECTORY ${THIRDPARTY_DIRECTORY}/HesaiLidar_SDK_2.0)
+set(HESAI_MACOS_FLAGS "")
+if(APPLE)
+    set(HESAI_MACOS_COMPAT ${CMAKE_SOURCE_DIR}/cmake/hesai_macos_compat)
+    set(HESAI_MACOS_FLAGS -I${HESAI_MACOS_COMPAT} -include ${HESAI_MACOS_COMPAT}/hesai_macos_compat.h)
 endif()
+get_directory_property(_hesai_saved_compile_options COMPILE_OPTIONS)
+add_compile_options(${HESAI_MACOS_FLAGS})
+add_subdirectory(${HESAI_SDK_DIRECTORY} ${CMAKE_BINARY_DIR}/3rdparty/HesaiLidar_SDK_2.0 EXCLUDE_FROM_ALL)
+set_directory_properties(PROPERTIES COMPILE_OPTIONS "${_hesai_saved_compile_options}")
+
+add_library(hesai_sdk INTERFACE)
+target_link_libraries(hesai_sdk INTERFACE hesai_sdk_lib)
+target_include_directories(hesai_sdk INTERFACE ${HESAI_SDK_DIRECTORY}/driver ${HESAI_SDK_DIRECTORY}/libhesai ${HESAI_SDK_DIRECTORY})
 
 message(STATUS "==== Dependencies Configuration Complete ====")
 

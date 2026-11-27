@@ -207,17 +207,20 @@ if (MSVC)
 endif()
 
 # hesai_pcap_to_laz: Hesai pcap (or a lidar_recorder session of .pcap.zst chunks) -> mandeye session directory.
-# Same writer and chunking as mcap_to_laz; the packets are decoded by the Hesai LiDAR SDK (3rdparty/HesaiLidar_SDK_2.0).
+# Same writer and chunking as mcap_to_laz; the packets are decoded by recording_sources/hesai_decoder (the Hesai LiDAR
+# SDK's parser, 3rdparty/HesaiLidar_SDK_2.0), as lidar_odometry_step_1 reads a capture directly.
 add_executable(
         hesai_pcap_to_laz hesai_pcap_to_laz.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.h ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.cpp
+        ${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.h ${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.cpp
 )
+set_source_files_properties(${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.cpp PROPERTIES COMPILE_OPTIONS "${HESAI_MACOS_FLAGS}")
 
 target_include_directories(
         hesai_pcap_to_laz
-        PRIVATE ${REPOSITORY_DIRECTORY}/rosbags
+        PRIVATE ${REPOSITORY_DIRECTORY}/rosbags ${REPOSITORY_DIRECTORY}/recording_sources
         ${LASZIP_INCLUDE_DIR}/LASzip/include)
 
 target_link_libraries(
