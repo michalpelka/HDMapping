@@ -2900,6 +2900,7 @@ int main(int argc, char* argv[])
                       << "USAGE:\n"
                       << std::filesystem::path(argv[0]).stem().string() << " <input_folder> <parameter_file> <output_folder> /?\n"
                       << std::filesystem::path(argv[0]).stem().string() << " <input_folder>\n"
+                      << std::filesystem::path(argv[0]).stem().string() << " --gui [<input>...]\n"
                       << std::filesystem::path(argv[0]).stem().string() << " --dump-default-params <file.toml>\n\n"
                       << "where\n"
                       << "   <input_folder>       Path where scan files are located (*.csv, *.laz, *.sn), or a ROS1 bag\n"
@@ -2909,6 +2910,8 @@ int main(int argc, char* argv[])
                       << "                        (with <input_folder> alone, default parameters are used and the\n"
                       << "                        session is stored in the next free <input_folder>/lio_result_N,\n"
                       << "                        as the GUI does)\n"
+                      << "   --gui [<input>...]   Open the GUI even with inputs given; the inputs (folders, files,\n"
+                      << "                        bags) open as if dropped on the window\n"
                       << "   --dump-default-params <file.toml>\n"
                       << "                        Write the default parameters to <file.toml> and exit\n"
                       << "   -h, /h, --help, /?   Show this help and exit\n\n";
@@ -2943,7 +2946,24 @@ int main(int argc, char* argv[])
             }
         }
 
-        if (argc == 2) // running from command line
+        // --gui opens the GUI whatever else is given; the remaining arguments are recordings to open in it
+        std::vector<char*> gui_args{ argv[0] };
+        bool force_gui = false;
+        for (int i = 1; i < argc; ++i)
+        {
+            if (std::string(argv[i]) == "--gui")
+                force_gui = true;
+            else
+                gui_args.push_back(argv[i]);
+        }
+        if (force_gui)
+        {
+            argc = static_cast<int>(gui_args.size());
+            gui_args.push_back(nullptr);
+            argv = gui_args.data();
+        }
+
+        if (argc == 2 && !force_gui) // running from command line
         {
             auto path = fs::path(argv[1]);
             if (RecordingSourceFactory::find({ path }))
@@ -2986,7 +3006,7 @@ int main(int argc, char* argv[])
                 std::cout << "Results and run report saved to: '" << result_dir.string() << "'\n";
             }
         }
-        else if (argc == 4) // runnning from command line with custom params
+        else if (argc == 4 && !force_gui) // runnning from command line with custom params
         {
             // Load parameters from file using original TomlIO class
             TomlIO toml_io;
@@ -3027,6 +3047,8 @@ int main(int argc, char* argv[])
             params.publish_processing_head = publish_processing_head;
             initGL(&argc, argv, winTitle, display, mouse);
             trajectory_renderer.init();
+            if (force_gui && argc > 1)
+                openRecording(std::vector<fs::path>(argv + 1, argv + argc));
 
 #ifdef _WIN32
             InitTaskbarProgress();
