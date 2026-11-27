@@ -254,6 +254,8 @@ bool McapFileReader::read(const Callbacks& callbacks, const LogTimeRange& range)
 	auto messages = impl_->reader.readMessages(onProblem, read_options);
 	for(const auto& view : messages)
 	{
+		if(callbacks.onProgress)
+			callbacks.onProgress(view.message.logTime);
 		const auto* data = reinterpret_cast<const uint8_t*>(view.message.data);
 		const size_t size = view.message.dataSize;
 		const std::string& topic = view.channel->topic;

@@ -72,7 +72,7 @@ public:
     std::string chunkName(size_t i) const override;
     std::vector<Point3Di> loadPoints(size_t i, const PointFilter& filter) const override;
     ChunkStamp stamp(size_t i) const override;
-    void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) const override;
+    void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>& progress) const override;
 
     //! "ROS1 bag" or "MCAP".
     static std::string name();
@@ -107,6 +107,10 @@ private:
 
 using Ros1BagSource = BagSource<rosbags::Ros1BagFileReader>;
 using McapSource = BagSource<rosbags::McapFileReader>;
+
+//! Advice for ROS1 bags among files that use bz2 chunk compression, which loads tens of times slower than lz4 or none
+//! because the IMU data is read in one pass over the whole bag; empty when no file does.
+std::string bag_compression_hint(const std::vector<std::filesystem::path>& files);
 
 //! The file's topics. Returns an empty list and sets error when the file cannot be read.
 std::vector<BagChannel> list_bag_channels(const std::filesystem::path& file, std::string& error);

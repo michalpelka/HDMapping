@@ -62,6 +62,10 @@ public:
 	// unindexed bag.
 	std::optional<LogTimeRange> recordTimeSpan() const;
 
+	// Compression of the first chunk ("none", "bz2" or "lz4"), as rosbag writes
+	// one for the whole bag; empty for an unindexed bag or a read error.
+	std::string chunkCompression();
+
 private:
 	struct IndexedChunk
 	{
@@ -215,6 +219,9 @@ public:
 
 	// Record times covered by the bag's chunks; nullopt for an unindexed bag.
 	std::optional<LogTimeRange> logTimeSpan() const;
+
+	// Chunk compression of the bag ("none", "bz2", "lz4"); empty when unknown.
+	std::string compression();
 
 private:
 	Ros1BagReader reader_;

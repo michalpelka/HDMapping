@@ -31,7 +31,7 @@ public:
     std::string chunkName(size_t i) const override;
     std::vector<Point3Di> loadPoints(size_t i, const PointFilter& filter) const override;
     ChunkStamp stamp(size_t i) const override;
-    void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) const override;
+    void loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>& progress) const override;
 
 private:
     LazCsvSource() = default;

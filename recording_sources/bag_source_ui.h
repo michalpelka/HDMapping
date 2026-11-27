@@ -32,4 +32,5 @@ private:
     BagSourceConfig config_;
     std::vector<BagChannel> channels_;
     std::string list_error_;
+    std::string compression_hint_; //!< bag_compression_hint of the files
 };

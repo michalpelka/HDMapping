@@ -274,7 +274,7 @@ ChunkStamp LazCsvSource::stamp(size_t i) const
     return s;
 }
 
-void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans) const
+void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>&) const
 {
     // --- Load IMU data (still sequential, could parallelize later)
     std::cout << "loading IMU data from 'imu****.csv' using ID " << imu_number_to_use_ << " from reference '" << sn_file_ << "' ..\n";
