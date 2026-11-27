@@ -206,31 +206,43 @@ if (MSVC)
     target_compile_options(laz_to_mcap PRIVATE /bigobj)
 endif()
 
-# hesai_pcap_to_laz: Hesai pcap (or a lidar_recorder session of .pcap.zst chunks) -> mandeye session directory.
-# Same writer and chunking as mcap_to_laz; the packets are decoded by recording_sources/hesai_decoder (the Hesai LiDAR
-# SDK's parser, 3rdparty/HesaiLidar_SDK_2.0), as lidar_odometry_step_1 reads a capture directly.
+# hesai_pcap_to_laz: a recording -> mandeye session directory, read through the recording sources
+# (recording_sources/) exactly as lidar_odometry_step_1 reads it: Hesai .pcap / .pcap.zst captures or a lidar_recorder
+# session, or any other registered kind. The kinds register themselves, so their files are compiled in here.
+include(${REPOSITORY_DIRECTORY}/recording_sources/recording_sources.cmake)
 add_executable(
         hesai_pcap_to_laz hesai_pcap_to_laz.cpp
-        ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.h ${REPOSITORY_DIRECTORY}/rosbags/PcapUdpReader.cpp
+        ${RECORDING_SOURCE_FILES}
+        ${REPOSITORY_DIRECTORY}/apps/lidar_odometry_step_1/lidar_odometry_utils.h
+        ${REPOSITORY_DIRECTORY}/apps/lidar_odometry_step_1/lidar_odometry_utils.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionWriter.cpp
-        ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.h ${REPOSITORY_DIRECTORY}/rosbags/MandeyeSessionChunker.cpp
-        ${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.h ${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.cpp
 )
-set_source_files_properties(${REPOSITORY_DIRECTORY}/recording_sources/hesai_decoder.cpp PROPERTIES COMPILE_OPTIONS "${HESAI_MACOS_FLAGS}")
 
 target_include_directories(
         hesai_pcap_to_laz
-        PRIVATE ${REPOSITORY_DIRECTORY}/rosbags ${REPOSITORY_DIRECTORY}/recording_sources
-        ${LASZIP_INCLUDE_DIR}/LASzip/include)
+        PRIVATE ${REPOSITORY_DIRECTORY}/apps/lidar_odometry_step_1
+        ${REPOSITORY_DIRECTORY}/recording_sources
+        ${REPOSITORY_DIRECTORY}/rosbags
+        ${REPOSITORY_DIRECTORY}/core/include
+        ${THIRDPARTY_DIRECTORY}
+        ${THIRDPARTY_DIRECTORY}/glm
+        ${EIGEN3_INCLUDE_DIR}
+        ${THIRDPARTY_DIRECTORY}/tomlplusplus/include
+        ${THIRDPARTY_DIRECTORY}/json/include
+        ${LASZIP_INCLUDE_DIR}/LASzip/include
+        ${THIRDPARTY_DIRECTORY}/observation_equations/codes
+        ${THIRDPARTY_DIRECTORY}/vqf/vqf/cpp)
 
 target_link_libraries(
         hesai_pcap_to_laz
         PRIVATE
-        hesai_sdk
-        hdmapping_zstd
+        ${RECORDING_SOURCE_LIBRARIES}
+        unordered_dense::unordered_dense
         spdlog::spdlog
         ${PLATFORM_LASZIP_LIB}
-        ${PLATFORM_MISCELLANEOUS_LIBS})
+        ${PLATFORM_MISCELLANEOUS_LIBS}
+        ${CORE_LIBRARIES}
+        imgui_raylib) # the bag kinds' option forms (bag_source_ui.cpp)
 
 # bow_loop_closure_detect: headless verification tool for the automatic
 # image-based (fbow) loop closure detector shared with step 2's GUI --
