@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <map>
 
 #include <imgui.h>
@@ -17,6 +19,7 @@
 
 #include <Core/export_laz.h>
 #include <Core/icp.h>
+#include <Core/instrument_offset.h>
 #include <Core/ndt.h>
 #include <Core/observation_picking.h>
 #include <Core/pair_wise_iterative_closest_point.h>
@@ -160,6 +163,7 @@ bool gizmo_all_sessions = false;
 //!< Stashed Gizmo update when ImGuizmo::IsUsing(). index is sessionId
 std::map<size_t, std::vector<Eigen::Affine3d>> session_drag_preview_poses;
 bool is_ndt_gui = false;
+bool is_instrument_offset_gui = false;
 bool is_loop_closure_gui = false;
 bool prev_is_loop_closure_gui = false;
 bool remove_gui = false;
@@ -398,6 +402,157 @@ void ndt_gui()
         ndt.sigma_azimuthal_angle = 8.0 / 3600;
     }
 #endif
+}
+
+//! Tools > Instrument offset: the fixed pose of one instrument (e.g. a camera session) relative to another (e.g. the
+//! lidar session) on the same rig, fitted from their paths (instrument_offset::estimate).
+void instrument_offset_gui()
+{
+    static int reference_index = 0;
+    static int instrument_index = 1;
+    static double time_shift_s = 0.0;
+    static instrument_offset::Options options;
+    static instrument_offset::Result result;
+    static std::string reference_name, instrument_name, status;
+
+    if (!ImGui::Begin("Instrument offset", &is_instrument_offset_gui, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+
+    const int n = static_cast<int>(sessions.size());
+    reference_index = std::clamp(reference_index, 0, std::max(n - 1, 0));
+    instrument_index = std::clamp(instrument_index, 0, std::max(n - 1, 0));
+    const auto session_label = [](int i)
+    {
+        const fs::path p(sessions[i].session_file_name);
+        return std::to_string(i) + ": " + (p.parent_path().filename() / p.filename()).string();
+    };
+    const auto session_combo = [&](const char* label, int& index)
+    {
+        if (ImGui::BeginCombo(label, n > 0 ? session_label(index).c_str() : ""))
+        {
+            for (int i = 0; i < n; i++)
+                if (ImGui::Selectable(session_label(i).c_str(), i == index))
+                    index = i;
+            ImGui::EndCombo();
+        }
+    };
+
+    ImGui::Text("frame * instrument(t) = reference(t + time shift) * offset");
+    session_combo("Reference (e.g. lidar)", reference_index);
+    session_combo("Instrument (e.g. camera)", instrument_index);
+    ImGui::InputDouble("Instrument time shift [s]", &time_shift_s, 0.001, 0.01, "%.4f");
+    ImGui::Checkbox("Estimate time shift", &options.estimate_time_shift);
+    ImGui::Checkbox("Estimate frame (sessions not registered)", &options.estimate_frame);
+    ImGui::Checkbox("Estimate scale of the instrument path", &options.estimate_scale);
+
+    ImGui::BeginDisabled(n < 2 || reference_index == instrument_index);
+    if (ImGui::Button("Compute"))
+    {
+        result = instrument_offset::estimate(
+            instrument_offset::session_trajectory(sessions[reference_index]),
+            instrument_offset::session_trajectory(sessions[instrument_index]),
+            time_shift_s,
+            options);
+        reference_name = session_label(reference_index);
+        instrument_name = session_label(instrument_index);
+        status = result.valid ? "" : "No result: the instrument path does not overlap the reference path in time";
+        if (result.valid)
+        {
+            time_shift_s = result.time_shift_s;
+            const Eigen::Quaterniond q(result.offset.linear());
+            spdlog::info(
+                "instrument offset {} -> {}: t [{:.4f} {:.4f} {:.4f}] m, q xyzw [{:.6f} {:.6f} {:.6f} {:.6f}], time shift {:.4f} s, "
+                "scale {:.6f}, rms {:.2f} mm / {:.3f} deg, {} pairs",
+                reference_name,
+                instrument_name,
+                result.offset.translation().x(),
+                result.offset.translation().y(),
+                result.offset.translation().z(),
+                q.x(),
+                q.y(),
+                q.z(),
+                q.w(),
+                result.time_shift_s,
+                result.scale,
+                result.rms_translation_m * 1000.0,
+                result.rms_rotation_deg,
+                result.pairs);
+        }
+    }
+    ImGui::EndDisabled();
+
+    if (!status.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", status.c_str());
+
+    if (result.valid)
+    {
+        const Eigen::Vector3d t = result.offset.translation();
+        const Eigen::Quaterniond q(result.offset.linear());
+        const TaitBryanPose tb = pose_tait_bryan_from_affine_matrix(result.offset);
+        const TaitBryanPose fr = pose_tait_bryan_from_affine_matrix(result.frame);
+        const Eigen::Matrix4d m = result.offset.matrix();
+
+        ImGui::Separator();
+        ImGui::Text("%s -> %s", reference_name.c_str(), instrument_name.c_str());
+        ImGui::Text("translation [m]      %.4f %.4f %.4f", t.x(), t.y(), t.z());
+        ImGui::Text("quaternion x y z w   %.6f %.6f %.6f %.6f", q.x(), q.y(), q.z(), q.w());
+        ImGui::Text("om fi ka [deg]       %.3f %.3f %.3f", rad2deg(tb.om), rad2deg(tb.fi), rad2deg(tb.ka));
+        for (int r = 0; r < 4; r++)
+            ImGui::Text("%10.6f %10.6f %10.6f %10.6f", m(r, 0), m(r, 1), m(r, 2), m(r, 3));
+        ImGui::Text("time shift [s] %.4f, scale %.6f", result.time_shift_s, result.scale);
+        ImGui::Text(
+            "frame: t [m] %.4f %.4f %.4f, om fi ka [deg] %.3f %.3f %.3f",
+            fr.px,
+            fr.py,
+            fr.pz,
+            rad2deg(fr.om),
+            rad2deg(fr.fi),
+            rad2deg(fr.ka));
+        ImGui::Text("pairs %d, residual rms %.2f mm / %.3f deg", result.pairs, result.rms_translation_m * 1000.0, result.rms_rotation_deg);
+
+        nlohmann::json j;
+        j["reference_session"] = sessions.size() > static_cast<size_t>(reference_index) ? sessions[reference_index].session_file_name : "";
+        j["instrument_session"] =
+            sessions.size() > static_cast<size_t>(instrument_index) ? sessions[instrument_index].session_file_name : "";
+        j["model"] = "frame * instrument(t) = reference(t + time_shift) * offset, instrument translation scaled by scale";
+        j["time_shift_s"] = result.time_shift_s;
+        j["scale"] = result.scale;
+        j["pairs"] = result.pairs;
+        j["translation_m"] = { t.x(), t.y(), t.z() };
+        j["quaternion_xyzw"] = { q.x(), q.y(), q.z(), q.w() };
+        j["om_fi_ka_deg"] = { rad2deg(tb.om), rad2deg(tb.fi), rad2deg(tb.ka) };
+        j["matrix_row_major"] = nlohmann::json::array();
+        j["frame_matrix_row_major"] = nlohmann::json::array();
+        for (int r = 0; r < 4; r++)
+        {
+            j["matrix_row_major"].push_back({ m(r, 0), m(r, 1), m(r, 2), m(r, 3) });
+            const Eigen::Matrix4d f = result.frame.matrix();
+            j["frame_matrix_row_major"].push_back({ f(r, 0), f(r, 1), f(r, 2), f(r, 3) });
+        }
+        j["residual"] = { { "rms_translation_m", result.rms_translation_m }, { "rms_rotation_deg", result.rms_rotation_deg } };
+
+        if (ImGui::Button("Copy as JSON"))
+            ImGui::SetClipboardText(j.dump(2).c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Save as JSON..."))
+        {
+            const std::string path = mandeye::fd::SaveFileDialog(
+                "Save instrument offset", { "JSON file (*.json)", "*.json" }, ".json", "instrument_offset.json");
+            if (!path.empty())
+            {
+                std::ofstream out(fs::path(path), std::ios::binary);
+                out << j.dump(2) << "\n";
+                if (out)
+                    std::cout << "instrument offset saved to '" << path << "'" << std::endl;
+                else
+                    std::cerr << "could not write '" << path << "'" << std::endl;
+            }
+        }
+    }
+    ImGui::End();
 }
 
 // Places the edge gizmo at the active edge's target pose.
@@ -3723,6 +3878,12 @@ void display()
                 ImGui::EndTooltip();
             }
 
+            ImGui::MenuItem("Instrument offset", nullptr, &is_instrument_offset_gui, !is_loop_closure_gui && (sessions.size() >= 2));
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(
+                    "Fixed pose of one instrument (e.g. camera session) relative to another (e.g. lidar session)\n"
+                    "on the same rig, from their trajectories once both are registered. Needs 2 sessions.");
+
             // bool prev_is_loop_closure_gui
             ImGui::MenuItem(
                 "Manual Loop Closure",
@@ -3982,6 +4143,9 @@ void display()
     if (is_ndt_gui)
         ndt_gui();
 
+    if (is_instrument_offset_gui)
+        instrument_offset_gui();
+
     if (!prev_is_loop_closure_gui && is_loop_closure_gui)
     {
         spdlog::debug("Open loop open gui");
@@ -4101,8 +4265,10 @@ int main(int argc, char* argv[])
             std::cout << winTitle << "\n\n"
                       << "USAGE:\n"
                       << std::filesystem::path(argv[0]).stem().string()
-                      << " [--mjp <project.mjp>] [--mjs <session.mjs> ...] [<input_file> ...] /?\n\n"
+                      << " [--downsample <m>] [--mjp <project.mjp>] [--mjs <session.mjs> ...] [<input_file> ...] /?\n\n"
                       << "where\n"
+                      << "   --downsample <m>     Bucket size [m] for downsampling during load; 0 loads full density\n"
+                      << "                        (default: Settings > Downsample during load, " << bucket_x << " m)\n"
                       << "   --mjp <project.mjp>  Mandeye JSON Project file to open\n"
                       << "   --mjs <file> [...]   Session file(s) (*.mjs, *.json) to add to the project and load\n"
                       << "   <input_file>         *.mjp opens a project, *.mjs / *.json adds a session\n"
@@ -4123,6 +4289,36 @@ int main(int argc, char* argv[])
             if (arg == "--mjp" || arg == "--mjs")
             {
                 current_flag = arg;
+                continue;
+            }
+            if (arg == "--downsample")
+            {
+                current_flag.clear();
+                double bucket = -1.0;
+                if (i + 1 < argc)
+                {
+                    try
+                    {
+                        size_t used = 0;
+                        const std::string value(argv[i + 1]);
+                        bucket = std::stod(value, &used);
+                        if (used != value.size())
+                            bucket = -1.0;
+                    } catch (const std::exception&)
+                    {
+                        bucket = -1.0;
+                    }
+                }
+                if (bucket < 0.0)
+                {
+                    std::cerr << "--downsample needs a bucket size in metres (0 = no downsampling), keeping the current setting"
+                              << std::endl;
+                    continue;
+                }
+                i++;
+                is_decimate = bucket > 0.0;
+                if (is_decimate)
+                    bucket_x = bucket_y = bucket_z = bucket;
                 continue;
             }
             if (arg.rfind("--", 0) == 0)
@@ -4156,6 +4352,11 @@ int main(int argc, char* argv[])
         }
         if (!session_files.empty())
             setLocationHintFromFile(session_files.back());
+
+        if (is_decimate)
+            std::cout << "Downsample during load: bucket " << bucket_x << " x " << bucket_y << " x " << bucket_z << " m" << std::endl;
+        else
+            std::cout << "Downsample during load: off" << std::endl;
 
         bool added = false;
         for (const auto& session_file : session_files)

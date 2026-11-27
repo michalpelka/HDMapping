@@ -6,6 +6,7 @@ project(hdmapping_core_tests)
 # Uses doctest, same as shared/tests.
 add_executable(hdmapping_core_tests
     test_pair_wise_icp.cpp
+    test_instrument_offset.cpp
 )
 
 target_include_directories(hdmapping_core_tests PRIVATE
