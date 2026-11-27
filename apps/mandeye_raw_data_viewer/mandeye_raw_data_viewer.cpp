@@ -1037,6 +1037,45 @@ void rebuildAllData(bool preserve_position)
 
 //! Loads the files of a Mandeye data folder, or the prepared recording when source is set (input_file_names is then
 //! empty).
+std::string load_warning; //!< why the loaded recording shows nothing; shown until dismissed
+
+//! @return Why the loaded recording shows nothing, or empty when it shows something.
+//! @note The viewer places points along the IMU trajectory, so it needs IMU samples spanning the points' time.
+std::string empty_view_warning(const Imu& imu_data)
+{
+    if (!all_data.empty())
+        return {};
+    size_t points = 0;
+    double first = std::numeric_limits<double>::max();
+    double last = std::numeric_limits<double>::lowest();
+    for (const auto& file : g_points_per_file)
+    {
+        if (file.empty())
+            continue;
+        points += file.size();
+        first = std::min(first, file.front().timestamp);
+        last = std::max(last, file.back().timestamp);
+    }
+    std::ostringstream out;
+    if (points == 0)
+        out << "The recording has no points.";
+    else if (imu_data.empty())
+        out << "The recording has no IMU samples, so its " << points << " points cannot be shown:\n"
+            << "the viewer places them along the IMU trajectory.";
+    else
+    {
+        const double imu_first = std::get<0>(imu_data.front()).first;
+        const double imu_last = std::get<0>(imu_data.back()).first;
+        if (last >= imu_first && first <= imu_last)
+            return {};
+        out << std::fixed << std::setprecision(3) << "No point falls within the IMU time span, so nothing can be shown\n"
+            << "(are the LiDAR and the IMU on different clocks?).\n"
+            << "IMU:    " << imu_first << " .. " << imu_last << " s\n"
+            << "points: " << first << " .. " << last << " s";
+    }
+    return out.str();
+}
+
 void loadFiles(std::vector<std::string> input_file_names, const std::shared_ptr<RecordingSource>& source = nullptr)
 {
     LidarOdometryParams params; // dummy for load_data function
@@ -1270,6 +1309,10 @@ void loadFiles(std::vector<std::string> input_file_names, const std::shared_ptr<
         g_poses_cache = std::move(poses);
 
         rebuildAllData(false);
+
+        load_warning = empty_view_warning(imu_data);
+        if (!load_warning.empty())
+            spdlog::warn("{}", load_warning);
     }
 }
 
@@ -1369,6 +1412,18 @@ void source_config_window()
     ImGui::End();
     if (!open)
         source_config_ui.reset();
+}
+
+//! The load warning, centred until closed.
+void load_warning_window()
+{
+    bool open = true;
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::Begin("Nothing to show", &open, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", load_warning.c_str());
+    ImGui::End();
+    if (!open)
+        load_warning.clear();
 }
 
 void imu_data_gui()
@@ -2354,6 +2409,9 @@ void display()
 
     if (source_config_ui)
         source_config_window();
+
+    if (!load_warning.empty())
+        load_warning_window();
 
     rlImGuiEnd();
 }
