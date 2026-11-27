@@ -248,17 +248,14 @@ void appendConnectionRecord(std::vector<uint8_t>& out, const Ros1Connection& c)
 
 bool decompress(const std::string& compression, const std::vector<uint8_t>& in, size_t out_size, std::vector<uint8_t>& out, std::string& error)
 {
-	out.resize(out_size);
 	if(compression == "none")
 	{
-		if(in.size() != out_size)
-		{
-			error = "uncompressed chunk size mismatch";
-			return false;
-		}
+		// The record data is the chunk; some writers put a wrong "size" in the header
+		// of an uncompressed chunk (e.g. 1), which rosbag itself ignores too.
 		out = in;
 		return true;
 	}
+	out.resize(out_size);
 	if(compression == "bz2")
 	{
 		unsigned int dst = static_cast<unsigned int>(out_size);
