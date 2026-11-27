@@ -2,6 +2,7 @@
 #include "hesai_decoder.h"
 
 #include "hesai_pcap_source.h"
+#include "laz_csv_source.h"
 
 #include <algorithm>
 #include <cmath>
@@ -145,6 +146,8 @@ void HesaiPcapSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpan
         std::error_code ec;
         total_bytes += fs::file_size(file, ec);
     }
+    const size_t samples_before = imu_data.size();
+    const size_t spans_before = imuSpans.size();
     uint64_t done_bytes = 0;
     // One decoder for every file: they are one continuous recording, and the decoder drops a sample repeated in the
     // next packet, which at a file boundary is the first packet of the next file.
@@ -185,6 +188,29 @@ void HesaiPcapSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpan
             span.count++;
         }
         imuSpans.push_back(span);
+
+        // A lidar without an IMU (or one the Mandeye unit does not use): the unit logged the IMU itself, as for a Livox
+        // recording, into imu****.csv or an external IMU's MURATA_IMU folder next to the captures.
+        if (imu_data.size() == samples_before)
+        {
+            const fs::path folder = workingDirectory();
+            std::vector<std::string> csv_files;
+            std::error_code ec;
+            for (const auto& e : fs::directory_iterator(folder, ec))
+            {
+                const std::string n = e.path().filename().string();
+                if (e.is_regular_file() && n.rfind("imu", 0) == 0 && e.path().extension() == ".csv")
+                    csv_files.push_back(e.path().string());
+            }
+            std::sort(csv_files.begin(), csv_files.end());
+            std::cout << "no IMU data in the lidar packets of '" << file.string() << "', loading the IMU files of '" << folder.string()
+                      << "' ..\n";
+            imuSpans.resize(spans_before);
+            load_mandeye_imu(csv_files, folder, 0, imu_data, imuSpans);
+            if (progress)
+                progress(1.0);
+            return;
+        }
     }
 }
 
