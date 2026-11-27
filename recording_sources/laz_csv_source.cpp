@@ -276,10 +276,15 @@ ChunkStamp LazCsvSource::stamp(size_t i) const
 
 void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, const std::function<void(double)>&) const
 {
-    // --- Load IMU data (still sequential, could parallelize later)
     std::cout << "loading IMU data from 'imu****.csv' using ID " << imu_number_to_use_ << " from reference '" << sn_file_ << "' ..\n";
+    load_mandeye_imu(csv_files_, working_directory_, imu_number_to_use_, imu_data, imuSpans);
+}
 
-    const std::size_t minSize = csv_files_.size();
+void load_mandeye_imu(
+    const std::vector<std::string>& csv_files, const fs::path& folder, int imu_number, Imu& imu_data, std::vector<InputFileSpan>& imuSpans)
+{
+    // --- Load IMU data (still sequential, could parallelize later)
+    const std::size_t minSize = csv_files.size();
     // Each thread loads into its own local vector
     std::vector<Imu> imuChunks(minSize);
 
@@ -289,21 +294,22 @@ void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, 
         {
             for (size_t i = range.begin(); i < range.end(); ++i)
             {
-                imuChunks[i] = load_imu(csv_files_[i].c_str(), imu_number_to_use_);
+                imuChunks[i] = load_imu(csv_files[i].c_str(), imu_number);
             }
         });
 
     for (size_t i = 0; i < minSize; ++i)
-        imuSpans.push_back(imu_file_span(csv_files_[i], imuChunks[i]));
+        imuSpans.push_back(imu_file_span(csv_files[i], imuChunks[i]));
 
     // Merge all chunks sequentially at the end
+    const size_t first = imu_data.size();
     for (auto& chunk : imuChunks)
         imu_data.insert(imu_data.end(), std::make_move_iterator(chunk.begin()), std::make_move_iterator(chunk.end()));
 
     // Units with an external IMU (e.g. Murata) leave 'imu****.csv' header-only and log the IMU
     // into a subfolder, in files not aligned with the LiDAR chunks
-    const fs::path murataImuDir = working_directory_ / "MURATA_IMU";
-    if (imu_data.empty() && fs::is_directory(murataImuDir))
+    const fs::path murataImuDir = folder / "MURATA_IMU";
+    if (imu_data.size() == first && fs::is_directory(murataImuDir))
     {
         std::vector<std::string> murataFiles;
         for (const auto& entry : fs::directory_iterator(murataImuDir))
@@ -323,9 +329,9 @@ void LazCsvSource::loadImu(Imu& imu_data, std::vector<InputFileSpan>& imuSpans, 
             murataFiles.size(),
             [&](size_t i)
             {
-                murataChunks[i] = load_imu(murataFiles[i], imu_number_to_use_);
+                murataChunks[i] = load_imu(murataFiles[i], imu_number);
             });
-        imuSpans.clear();
+        imuSpans.resize(imuSpans.size() - minSize);
         for (size_t i = 0; i < murataFiles.size(); ++i)
             imuSpans.push_back(imu_file_span(murataFiles[i], murataChunks[i]));
         for (auto& chunk : murataChunks)
