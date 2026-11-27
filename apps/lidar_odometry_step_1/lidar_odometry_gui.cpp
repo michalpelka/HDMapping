@@ -17,6 +17,7 @@
 
 #include "lidar_odometry.h"
 #include "lidar_odometry_utils.h"
+#include "recording_source_factory.h"
 #include "render_cache.h"
 #include "trajectory_follow.h"
 
@@ -204,6 +205,40 @@ bool pipelinePending = false;
 bool pendingCompute = true, pendingSave = true;
 std::string pendingFolder;
 void startPipeline(const std::string& folder, bool compute, bool save);
+void openData(const std::string& folder = "", bool compute = true, bool save = true);
+// What the next startPipeline() loads: a recording an options window already opened, or paths the kind opens in step1()
+std::shared_ptr<RecordingSource> pending_recording;
+std::shared_ptr<const RecordingSourceFactory> pending_kind;
+std::vector<fs::path> pending_paths;
+std::unique_ptr<RecordingSourceConfigUi> source_config_ui; //!< the open options window of a recording kind, if any
+std::string source_open_error;
+bool source_config_compute = true, source_config_save = true; //!< startPipeline arguments once the window opens the recording
+
+//! Folder a recording given as paths is named after: the folder itself, or the folder of the first file.
+static fs::path recording_folder(const std::vector<fs::path>& paths)
+{
+    if (paths.empty())
+        return {};
+    return fs::is_directory(paths.front()) ? paths.front() : paths.front().parent_path();
+}
+
+//! Progress bars of load_data: the IMU read, then the point chunks.
+static void load_progress_gui()
+{
+    const auto progress = params.load_progress;
+    if (!progress)
+        return;
+    const float imu = static_cast<float>(progress->imu.load());
+    char text[64];
+    std::snprintf(text, sizeof(text), "IMU data %.0f %%", imu * 100.0f);
+    ImGui::ProgressBar(imu, ImVec2(400.0f, 0.0f), text);
+    const size_t total = progress->chunks_total.load();
+    if (total == 0)
+        return;
+    const size_t done = std::min(progress->chunks_done.load(), total);
+    std::snprintf(text, sizeof(text), "Point clouds %zu / %zu", done, total);
+    ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total), ImVec2(400.0f, 0.0f), text);
+}
 
 static void resources_gui()
 {
@@ -695,38 +730,48 @@ Eigen::Vector3d GLWidgetGetOGLPos(int x, int y, const ObservationPicking& observ
 void step1(const std::string& input_folder_name, const std::atomic<bool>& loPause)
 {
     trajectory_points_dirty = true;
-    std::vector<std::string> input_file_names;
+    // a recording opened by an options window, or the paths its kind opens here
+    std::shared_ptr<RecordingSource> recording = std::exchange(pending_recording, nullptr);
+    const auto kind = std::exchange(pending_kind, nullptr);
+    const auto paths = std::exchange(pending_paths, {});
 
-    std::cout << "Selected folder: '" << input_folder_name << std::endl;
+    std::cout << "Selected recording: '" << input_folder_name << "'" << std::endl;
 
-    if (fs::exists(input_folder_name))
+    std::string error;
+    if (!recording && kind)
     {
         RunReport::Scope discovery(params.run_report.get(), RunReport::Stage::Loading);
-        for (const auto& entry : fs::directory_iterator(input_folder_name))
-            if (entry.is_regular_file())
-                input_file_names.push_back(entry.path().string());
-
+        std::cout << "Opening as " << kind->name() << std::endl;
+        recording = kind->open(paths, error);
         discovery.finish();
-        if (load_data(input_file_names, params, pointsPerFile, imu_data, full_debug_messages))
+    }
+
+    bool loaded = false;
+    if (recording)
+    {
+        InputFileSpans spans;
+        loaded = load_data(recording, params, pointsPerFile, imu_data, spans);
+        if (loaded)
+            working_directory = recording->workingDirectory().string();
+    }
+    if (loaded)
+    {
+        calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
+        if (compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
         {
-            working_directory = fs::path(input_file_names[0]).parent_path().string();
-            calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
-            if (compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
-            {
-                release_raw_clouds(pointsPerFile, params); // nothing after step 1 reads them
-                step_1_done = true;
-                publish_trajectory_preview(worker_data, true);
-            }
-            else
-                std::cerr << "Lidar odometry step 1 failed (see the messages above)" << std::endl;
+            release_raw_clouds(pointsPerFile, params); // nothing after step 1 reads them
+            step_1_done = true;
+            publish_trajectory_preview(worker_data, true);
         }
         else
-        {
-            std::string message_info = "Problem with loading data from folder '" + input_folder_name +
-                "' (Pease check if folder exists). Program will close once You click OK!!!";
-            std::cout << message_info << std::endl;
-            throw std::runtime_error("Input data loading failed: " + input_folder_name);
-        }
+            std::cerr << "Lidar odometry step 1 failed (see the messages above)" << std::endl;
+    }
+    else
+    {
+        std::string message_info = "Problem with loading data from '" + input_folder_name + "'" + (error.empty() ? "" : ": " + error) +
+            ". Program will close once You click OK!!!";
+        std::cout << message_info << std::endl;
+        throw std::runtime_error("Input data loading failed: " + input_folder_name + (error.empty() ? "" : ": " + error));
     }
 }
 
@@ -1210,9 +1255,7 @@ void settings_gui()
         {
             if (ImGui::Button("Load data"))
             {
-                const auto folder = mandeye::fd::SelectFolder("Select Mandeye data folder");
-                if (!folder.empty())
-                    startPipeline(folder, false, false);
+                openData("", false, false);
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
@@ -1866,13 +1909,47 @@ void progress_window()
     ImGui::End();
 }
 
-//! folder: Mandeye data folder to process; empty asks for one with a folder dialog.
+//! Hands paths to the recording kind that reads them: its options window when it has one, otherwise the pipeline, which
+//! opens them in the worker.
+void openRecording(const std::vector<fs::path>& paths, bool compute = true, bool save = true)
+{
+    if (paths.empty())
+        return;
+    const auto kind = RecordingSourceFactory::find(paths);
+    if (!kind)
+    {
+        std::lock_guard lock(completionMutex);
+        completionMessage =
+            "No recording kind reads '" + paths.front().string() + "'" + (paths.size() > 1 ? " and the other dropped paths" : "");
+        return;
+    }
+    if (auto ui = kind->configure(paths))
+    {
+        source_open_error.clear();
+        source_config_ui = std::move(ui);
+        source_config_compute = compute;
+        source_config_save = save;
+        return;
+    }
+    pending_kind = kind;
+    pending_paths = paths;
+    startPipeline(recording_folder(paths).string(), compute, save);
+}
+
+//! folder: recording folder to process; empty asks for one with a folder dialog.
 //! Loading and processing share one owned worker; drawing is suspended only during initial preparation.
-void openData(const std::string& folder = "")
+void openData(const std::string& folder, bool compute, bool save)
 {
     const std::string input_folder_name = folder.empty() ? mandeye::fd::SelectFolder("Select Mandeye data folder") : folder;
     if (!input_folder_name.empty())
-        startPipeline(input_folder_name, true, true);
+        openRecording({ fs::path(input_folder_name) }, compute, save);
+}
+
+//! Asks for recording files of any registered kind and opens them.
+void openRecordingFiles()
+{
+    const auto files = mandeye::fd::OpenFileDialog("Select recording", RecordingSourceFactory::fileFilters(), true);
+    openRecording(std::vector<fs::path>(files.begin(), files.end()));
 }
 
 void startPipeline(const std::string& folder, bool compute, bool save)
@@ -1883,6 +1960,28 @@ void startPipeline(const std::string& folder, bool compute, bool save)
     pendingCompute = compute;
     pendingSave = save;
     pipelinePending = true;
+}
+
+//! Options window of the recording kind being opened; its Open button starts the pipeline.
+static void source_config_window()
+{
+    bool open = true;
+    ImGui::Begin(source_config_ui->title().c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize);
+    if (source_config_ui->draw())
+    {
+        auto source = source_config_ui->open(source_open_error);
+        if (source)
+        {
+            pending_recording = std::move(source);
+            startPipeline(pending_recording->workingDirectory().string(), source_config_compute, source_config_save);
+            open = false;
+        }
+    }
+    if (!source_open_error.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", source_open_error.c_str());
+    ImGui::End();
+    if (!open)
+        source_config_ui.reset();
 }
 
 static void launchPipeline(const std::string& folder, bool compute, bool save)
@@ -1909,6 +2008,7 @@ static void launchPipeline(const std::string& folder, bool compute, bool save)
         if (params.run_report && !params.working_directory_cache.empty())
             remove_cache(params);
         params.run_report = std::make_shared<RunReport>(folder, params.points_global_spill_directory, "gui");
+        params.load_progress = std::make_shared<LoadProgress>();
         step_1_done = step_2_done = false;
         calculations_failed = false;
         pendingLoadFolder = folder;
@@ -1999,23 +2099,29 @@ bool step1(
     std::vector<WorkerData>& worker_data,
     const std::atomic<bool>& loPause)
 {
-    params.run_report = std::make_shared<RunReport>(folder, params.points_global_spill_directory, "cli");
-    std::vector<std::string> input_file_names;
+    // any registered recording kind, opened with its default options (the GUI lets the user choose them)
+    const std::vector<fs::path> paths{ fs::path(folder) };
+    params.run_report = std::make_shared<RunReport>(recording_folder(paths), params.points_global_spill_directory, "cli");
     RunReport::Scope discovery(params.run_report.get(), RunReport::Stage::Loading);
 
-    for (const auto& entry : fs::directory_iterator(folder))
+    const auto kind = RecordingSourceFactory::find(paths);
+    if (!kind)
     {
-        if (!entry.is_directory())
-        {
-            std::cout << entry.path() << std::endl;
-            input_file_names.push_back(entry.path().string());
-        }
+        std::cerr << "No recording kind reads '" << folder << "'" << std::endl;
+        return false;
     }
-
+    std::string error;
+    const auto source = kind->open(paths, error);
     discovery.finish();
-    if (load_data(input_file_names, params, pointsPerFile, imu_data, full_debug_messages))
+    if (!source)
     {
-        working_directory = fs::path(input_file_names[0]).parent_path().string();
+        std::cerr << "Cannot read '" << folder << "' as " << kind->name() << ": " << error << std::endl;
+        return false;
+    }
+    InputFileSpans spans;
+    if (load_data(source, params, pointsPerFile, imu_data, spans))
+    {
+        working_directory = source->workingDirectory().string();
         calculate_trajectory(trajectory, imu_data, params, full_debug_messages);
         if (!compute_step_1(pointsPerFile, params, trajectory, worker_data, loPause))
             return false;
@@ -2097,6 +2203,7 @@ void display()
         if (ImGui::SmallButton("Controls / Help (F1)"))
             info_gui = true;
         ImGui::Text("Loading and preparing: %s", pendingLoadFolder.c_str());
+        load_progress_gui();
         recording_span_gui();
         resources_gui();
         ImGui::End();
@@ -2343,15 +2450,10 @@ void display()
 
     view_kbd_shortcuts();
 
-    // Drag and drop: a Mandeye data folder, or any file in one, is processed like "Load & process scanning".
+    // Drag and drop: the dropped files and folders go to the recording kind that reads them (see openRecording)
     const auto dropped = takeDroppedFiles();
     if (!dropped.empty() && !loRunning && !pipelinePending)
-    {
-        fs::path folder(dropped[0]);
-        if (!fs::is_directory(folder))
-            folder = folder.parent_path();
-        openData(folder.string());
-    }
+        openRecording(std::vector<fs::path>(dropped.begin(), dropped.end()));
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false) && !loRunning && !pipelinePending)
     {
@@ -2564,6 +2666,13 @@ void display()
                     "Select folder from where to load data and start processing (" SHORTCUT_CTRL "+O), or drop the folder on the window");
 
             ImGui::SameLine();
+            if (ImGui::Button("Load & process recording files"))
+                openRecordingFiles();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Select the files of a recording (e.g. a ROS1 bag or an MCAP file), set its options and start processing");
+
+            ImGui::SameLine();
             ImGui::Dummy(ImVec2(20, 0));
             ImGui::SameLine();
 
@@ -2731,6 +2840,9 @@ void display()
         settings_gui();
     }
 
+    if (!loRunning && source_config_ui)
+        source_config_window();
+
     if (loRunning)
         progress_window();
 
@@ -2788,14 +2900,18 @@ int main(int argc, char* argv[])
                       << "USAGE:\n"
                       << std::filesystem::path(argv[0]).stem().string() << " <input_folder> <parameter_file> <output_folder> /?\n"
                       << std::filesystem::path(argv[0]).stem().string() << " <input_folder>\n"
+                      << std::filesystem::path(argv[0]).stem().string() << " --gui [<input>...]\n"
                       << std::filesystem::path(argv[0]).stem().string() << " --dump-default-params <file.toml>\n\n"
                       << "where\n"
-                      << "   <input_folder>       Path where scan files are located (*.csv, *.laz, *.sn)\n"
+                      << "   <input_folder>       Path where scan files are located (*.csv, *.laz, *.sn), or a ROS1 bag\n"
+                      << "                        (*.bag) / MCAP file (*.mcap) with one lidar and one IMU topic\n"
                       << "   <parameter_file>     Path to TOML parameter file (*.toml)\n"
                       << "   <output_folder>      Path where processed session should be stored\n"
                       << "                        (with <input_folder> alone, default parameters are used and the\n"
                       << "                        session is stored in the next free <input_folder>/lio_result_N,\n"
                       << "                        as the GUI does)\n"
+                      << "   --gui [<input>...]   Open the GUI even with inputs given; the inputs (folders, files,\n"
+                      << "                        bags) open as if dropped on the window\n"
                       << "   --dump-default-params <file.toml>\n"
                       << "                        Write the default parameters to <file.toml> and exit\n"
                       << "   -h, /h, --help, /?   Show this help and exit\n\n";
@@ -2830,11 +2946,30 @@ int main(int argc, char* argv[])
             }
         }
 
-        if (argc == 2) // running from command line
+        // --gui opens the GUI whatever else is given; the remaining arguments are recordings to open in it
+        std::vector<char*> gui_args{ argv[0] };
+        bool force_gui = false;
+        for (int i = 1; i < argc; ++i)
+        {
+            if (std::string(argv[i]) == "--gui")
+                force_gui = true;
+            else
+                gui_args.push_back(argv[i]);
+        }
+        if (force_gui)
+        {
+            argc = static_cast<int>(gui_args.size());
+            gui_args.push_back(nullptr);
+            argv = gui_args.data();
+        }
+
+        if (argc == 2 && !force_gui) // running from command line
         {
             auto path = fs::path(argv[1]);
-            if (is_directory(path))
+            if (RecordingSourceFactory::find({ path }))
             {
+                // results and failure reports go next to a bag file, or into the data folder
+                const fs::path input_dir = is_directory(path) ? path : path.parent_path();
                 std::string working_directory;
                 std::vector<WorkerData> worker_data;
 
@@ -2846,7 +2981,7 @@ int main(int argc, char* argv[])
                     !step2(worker_data, params, loPause))
                 {
                     std::cerr << "Lidar odometry failed: no point-cloud results saved" << std::endl;
-                    save_failed_run_report(params, get_next_result_path(path.string()), "Loading/preparation/odometry failed");
+                    save_failed_run_report(params, get_next_result_path(input_dir.string()), "Loading/preparation/odometry failed");
                     remove_cache(params);
                     return 1;
                 }
@@ -2871,7 +3006,7 @@ int main(int argc, char* argv[])
                 std::cout << "Results and run report saved to: '" << result_dir.string() << "'\n";
             }
         }
-        else if (argc == 4) // runnning from command line with custom params
+        else if (argc == 4 && !force_gui) // runnning from command line with custom params
         {
             // Load parameters from file using original TomlIO class
             TomlIO toml_io;
@@ -2912,6 +3047,8 @@ int main(int argc, char* argv[])
             params.publish_processing_head = publish_processing_head;
             initGL(&argc, argv, winTitle, display, mouse);
             trajectory_renderer.init();
+            if (force_gui && argc > 1)
+                openRecording(std::vector<fs::path>(argv + 1, argv + argc));
 
 #ifdef _WIN32
             InitTaskbarProgress();

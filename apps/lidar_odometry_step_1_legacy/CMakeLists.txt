@@ -15,6 +15,8 @@ set(SOURCES
   ${STEP1_DIR}/lidar_odometry_utils_optimizers.cpp
   ${STEP1_DIR}/lidar_odometry.cpp
   ${STEP1_DIR}/points_global_spill.cpp
+  ${REPOSITORY_DIRECTORY}/recording_sources/laz_csv_source.cpp
+  ${REPOSITORY_DIRECTORY}/recording_sources/recording_source_factory.cpp
   ${STEP1_DIR}/raw_cloud_loader.cpp
   ${STEP1_DIR}/toml_io.cpp
   "../../core/src/utils.cpp"
@@ -34,6 +36,7 @@ target_apply_hdmapping_profiler(lidar_odometry_step_1_legacy)
 target_include_directories(
   lidar_odometry_step_1_legacy
   PRIVATE ${STEP1_DIR}
+          ${REPOSITORY_DIRECTORY}/recording_sources
           ${REPOSITORY_DIRECTORY}/core/include
           ${REPOSITORY_DIRECTORY}/core_hd_mapping/include
           ${THIRDPARTY_DIRECTORY}

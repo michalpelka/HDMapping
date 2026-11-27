@@ -1,9 +1,7 @@
 #include "Ros1Bag.h"
 
-#if !defined(MCAP_COMPRESSION_NO_LZ4) // same switch as the mcap target: no compression libraries on Windows
 #include <bzlib.h>
 #include <lz4frame.h>
-#endif
 
 #include <algorithm>
 #include <cstring>
@@ -250,18 +248,14 @@ void appendConnectionRecord(std::vector<uint8_t>& out, const Ros1Connection& c)
 
 bool decompress(const std::string& compression, const std::vector<uint8_t>& in, size_t out_size, std::vector<uint8_t>& out, std::string& error)
 {
-	out.resize(out_size);
 	if(compression == "none")
 	{
-		if(in.size() != out_size)
-		{
-			error = "uncompressed chunk size mismatch";
-			return false;
-		}
+		// The record data is the chunk; some writers put a wrong "size" in the header
+		// of an uncompressed chunk (e.g. 1), which rosbag itself ignores too.
 		out = in;
 		return true;
 	}
-#if !defined(MCAP_COMPRESSION_NO_LZ4)
+	out.resize(out_size);
 	if(compression == "bz2")
 	{
 		unsigned int dst = static_cast<unsigned int>(out_size);
@@ -306,7 +300,6 @@ bool decompress(const std::string& compression, const std::vector<uint8_t>& in, 
 		}
 		return true;
 	}
-#endif
 	error = "unsupported chunk compression '" + compression + "'";
 	return false;
 }
@@ -434,8 +427,18 @@ bool Ros1BagReader::readIndex()
 					break;
 				message_counts[conn] += count;
 			}
+			IndexedChunk chunk;
+			const auto start = header.find("start_time");
+			const auto end = header.find("end_time");
+			if(fieldAs(header, "chunk_pos", chunk.pos) && start != header.end() && end != header.end())
+			{
+				chunk.start_ns = timeFromField(start->second);
+				chunk.end_ns = timeFromField(end->second);
+				chunks_.push_back(chunk);
+			}
 		}
 	}
+	std::sort(chunks_.begin(), chunks_.end(), [](const IndexedChunk& a, const IndexedChunk& b) { return a.pos < b.pos; });
 	for(const auto& [conn, count] : message_counts)
 	{
 		const auto it = connections_.find(conn);
@@ -499,10 +502,87 @@ bool Ros1BagReader::parseRecords(const uint8_t* data, size_t size, const Message
 	return true;
 }
 
+std::string Ros1BagReader::chunkCompression()
+{
+	if(!isOpen() || chunks_.empty())
+		return {};
+	file_.clear();
+	file_.seekg(static_cast<std::streamoff>(chunks_.front().pos));
+	HeaderFields header;
+	std::vector<uint8_t> data;
+	std::string error;
+	if(!readRecord(file_, header, data, error))
+		return {};
+	const auto compression = header.find("compression");
+	return compression == header.end() ? std::string{} : compression->second;
+}
+
+std::optional<LogTimeRange> Ros1BagReader::recordTimeSpan() const
+{
+	if(chunks_.empty())
+		return std::nullopt;
+	LogTimeRange span{std::numeric_limits<uint64_t>::max(), 0};
+	for(const auto& chunk : chunks_)
+	{
+		span.start_ns = std::min(span.start_ns, chunk.start_ns);
+		span.end_ns = std::max(span.end_ns, chunk.end_ns + 1);
+	}
+	return span;
+}
+
 bool Ros1BagReader::forEachMessage(const MessageFn& fn)
 {
 	if(!isOpen())
 		return false;
+	return scanAll(fn);
+}
+
+bool Ros1BagReader::forEachMessage(const MessageFn& fn, const LogTimeRange& range)
+{
+	if(!isOpen())
+		return false;
+	const MessageFn inRange = [&](const Ros1Connection& c, uint64_t time_ns, const uint8_t* data, size_t size)
+	{
+		return time_ns < range.start_ns || time_ns >= range.end_ns || fn(c, time_ns, data, size);
+	};
+	if(chunks_.empty())
+		return scanAll(inRange);
+
+	HeaderFields header;
+	std::vector<uint8_t> data, chunk;
+	bool stop = false;
+	for(const auto& indexed : chunks_)
+	{
+		if(indexed.end_ns < range.start_ns || indexed.start_ns >= range.end_ns)
+			continue;
+		file_.clear();
+		file_.seekg(static_cast<std::streamoff>(indexed.pos));
+		if(!readRecord(file_, header, data, error_))
+		{
+			if(error_.empty())
+				error_ = "cannot read the chunk at offset " + std::to_string(indexed.pos);
+			return false;
+		}
+		uint8_t op = 0;
+		uint32_t size = 0;
+		const auto compression = header.find("compression");
+		if(!fieldAs(header, "op", op) || op != kOpChunk || compression == header.end() || !fieldAs(header, "size", size))
+		{
+			error_ = "malformed chunk record at offset " + std::to_string(indexed.pos);
+			return false;
+		}
+		if(!decompress(compression->second, data, size, chunk, error_))
+			return false;
+		if(!parseRecords(chunk.data(), chunk.size(), inRange, stop))
+			return false;
+		if(stop)
+			break;
+	}
+	return true;
+}
+
+bool Ros1BagReader::scanAll(const MessageFn& fn)
+{
 	file_.clear();
 	file_.seekg(static_cast<std::streamoff>(kMagicSize));
 	HeaderFields header;
@@ -1008,7 +1088,17 @@ const std::string& Ros1BagFileReader::lidarLayoutWarning() const
 	return warning_;
 }
 
-bool Ros1BagFileReader::read(const Callbacks& callbacks)
+std::optional<LogTimeRange> Ros1BagFileReader::logTimeSpan() const
+{
+	return reader_.recordTimeSpan();
+}
+
+std::string Ros1BagFileReader::compression()
+{
+	return reader_.chunkCompression();
+}
+
+bool Ros1BagFileReader::read(const Callbacks& callbacks, const LogTimeRange& range)
 {
 	if(!open_)
 		return false;
@@ -1017,6 +1107,8 @@ bool Ros1BagFileReader::read(const Callbacks& callbacks)
 	const bool ok = reader_.forEachMessage(
 		[&](const Ros1Connection& c, uint64_t time_ns, const uint8_t* data, size_t size)
 		{
+			if(callbacks.onProgress)
+				callbacks.onProgress(time_ns);
 			if(c.topic == topics_.lidar && callbacks.onPointCloud)
 			{
 				std::vector<McapPoint> points;
@@ -1075,7 +1167,8 @@ bool Ros1BagFileReader::read(const Callbacks& callbacks)
 					callbacks.onSn(time_ns, sn);
 			}
 			return true;
-		});
+		},
+		range);
 	if(!ok)
 		error_ = reader_.error();
 	return ok;

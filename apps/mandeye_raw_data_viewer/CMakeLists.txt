@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 4.0.0)
 
 project(mandeye_raw_data_viewer)
 
+include(${REPOSITORY_DIRECTORY}/recording_sources/recording_sources.cmake)
+
 # Source files
 set(SOURCES
   mandeye_raw_data_viewer.cpp
@@ -10,6 +12,7 @@ set(SOURCES
   ../lidar_odometry_step_1/lidar_odometry_utils.cpp
   ../lidar_odometry_step_1/lidar_odometry_utils_optimizers.cpp
   ../lidar_odometry_step_1/points_global_spill.cpp
+  ${RECORDING_SOURCE_FILES}
   ../lidar_odometry_step_1/raw_cloud_loader.cpp
 )
 
@@ -27,6 +30,8 @@ add_executable(
 target_include_directories(
   mandeye_raw_data_viewer
   PRIVATE include
+  ${REPOSITORY_DIRECTORY}/apps/lidar_odometry_step_1
+  ${REPOSITORY_DIRECTORY}/recording_sources
   ${REPOSITORY_DIRECTORY}/core/include
   ${REPOSITORY_DIRECTORY}/core_hd_mapping/include
   ${THIRDPARTY_DIRECTORY}
@@ -38,11 +43,14 @@ target_include_directories(
   ${LASZIP_INCLUDE_DIR}/LASzip/include
   ${THIRDPARTY_DIRECTORY}/observation_equations/codes
   ${THIRDPARTY_DIRECTORY}/vqf/vqf/cpp
-  ${THIRDPARTY_DIRECTORY}/Fusion/Fusion)
+  ${THIRDPARTY_DIRECTORY}/Fusion/Fusion
+  ${REPOSITORY_DIRECTORY}/rosbags)
 
 target_link_libraries(
   mandeye_raw_data_viewer
   PRIVATE
+  mcap
+  ros1bag_compression
   step1_run_report
   # core_raylib_utils brings in core_raylib (core, raylib), raylib_widgets and rlImGui.
   core_raylib_utils

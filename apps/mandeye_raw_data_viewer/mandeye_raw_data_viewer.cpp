@@ -27,6 +27,7 @@
 
 #include "../lidar_odometry_step_1/lidar_odometry.h"
 #include "../lidar_odometry_step_1/lidar_odometry_utils.h"
+#include "recording_source_factory.h"
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -1034,7 +1035,9 @@ void rebuildAllData(bool preserve_position)
         playback_playing = false;
 }
 
-void loadFiles(std::vector<std::string> input_file_names)
+//! Loads the files of a Mandeye data folder, or the prepared recording when source is set (input_file_names is then
+//! empty).
+void loadFiles(std::vector<std::string> input_file_names, const std::shared_ptr<RecordingSource>& source = nullptr)
 {
     LidarOdometryParams params; // dummy for load_data function
     params.save_calibration_validation = false;
@@ -1047,10 +1050,12 @@ void loadFiles(std::vector<std::string> input_file_names)
     Imu imu_data;
 
     // no files selected, quit loading
-    if (input_file_names.empty())
+    if (input_file_names.empty() && !source)
         return;
 
-    if (load_data(input_file_names, params, pointsPerFile, imu_data, false, file_spans))
+    const bool loaded = source ? load_data(source, params, pointsPerFile, imu_data, file_spans)
+                               : load_data(input_file_names, params, pointsPerFile, imu_data, false, file_spans);
+    if (loaded)
     {
         // clear possible previous data
 
@@ -1094,7 +1099,7 @@ void loadFiles(std::vector<std::string> input_file_names)
             std::string ext = fs::path(fileName).extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-            if (ext == ".laz" || ext == ".las")
+            if ((ext == ".laz" || ext == ".las") && !source)
                 laz_files.push_back(fileName);
             else if (ext == ".jpg" || ext == ".jpeg")
             {
@@ -1121,6 +1126,11 @@ void loadFiles(std::vector<std::string> input_file_names)
                 }
             }
         }
+
+        // a recording's chunks have no files of their own: name them as load_data did
+        if (source)
+            for (const auto& span : file_spans.laz)
+                laz_files.push_back(span.file);
 
         // rest of RAW data viewer processing
 
@@ -1279,40 +1289,86 @@ void collectFolderFiles(const std::string& input_folder_name, std::vector<std::s
     }
 }
 
-void openFolder()
+std::unique_ptr<RecordingSourceConfigUi> source_config_ui; //!< the open options window of a recording kind, if any
+std::vector<std::string> source_config_files; //!< the picked files and folder contents, for photos, once the window opens
+std::string source_open_error;
+
+//! Opens paths (files and folders) through the recording kind that reads them, in its options window when it has one.
+//! Photos among the paths, or in the folders and their CAMERA_0, are shown with the recording.
+void openRecording(const std::vector<std::string>& paths)
 {
-    std::string input_folder_name;
-    std::vector<std::string> input_file_names;
-    input_folder_name = mandeye::fd::SelectFolder("Select Mandeye data folder");
+    if (paths.empty())
+        return;
+    const std::vector<fs::path> recording_paths(paths.begin(), paths.end());
+    const auto kind = RecordingSourceFactory::find(recording_paths);
+    if (!kind)
+    {
+        spdlog::error("No recording kind reads '{}'", paths.front());
+        return;
+    }
+    spdlog::info("Opening '{}' as {}", paths.front(), kind->name());
 
-    spdlog::info("Selected folder: '{}'", input_folder_name);
-
-    collectFolderFiles(input_folder_name, input_file_names);
-
-    loadFiles(input_file_names);
-}
-
-//! Drag and drop: dropped folders load like "Open folder", dropped files like "Open files".
-void openDropped(const std::vector<std::string>& paths)
-{
-    std::vector<std::string> input_file_names;
+    // a single file stands for its whole folder, as the kinds open it
+    std::vector<std::string> files;
+    if (paths.size() == 1 && fs::is_regular_file(paths.front()))
+        collectFolderFiles(fs::path(paths.front()).parent_path().string(), files);
     for (const auto& path : paths)
     {
         if (fs::is_directory(path))
-            collectFolderFiles(path, input_file_names);
-        else
-            input_file_names.push_back(path);
+            collectFolderFiles(path, files);
+        else if (paths.size() > 1)
+            files.push_back(path);
     }
 
-    if (!input_file_names.empty())
-        loadFiles(input_file_names);
+    if (auto ui = kind->configure(recording_paths))
+    {
+        source_open_error.clear();
+        source_config_ui = std::move(ui);
+        source_config_files = std::move(files);
+        return;
+    }
+    std::string error;
+    const auto source = kind->open(recording_paths, error);
+    if (!source)
+    {
+        spdlog::error("Cannot read '{}' as {}: {}", paths.front(), kind->name(), error);
+        return;
+    }
+    loadFiles(files, source);
+}
+
+void openFolder()
+{
+    const std::string input_folder_name = mandeye::fd::SelectFolder("Select Mandeye data folder");
+    spdlog::info("Selected folder: '{}'", input_folder_name);
+    if (!input_folder_name.empty())
+        openRecording({ input_folder_name });
 }
 
 void openFiles()
 {
-    std::vector<std::string> input_file_names = mandeye::fd::OpenFileDialog("Load all files", mandeye::fd::All_Filter, true);
+    openRecording(mandeye::fd::OpenFileDialog("Load all files", RecordingSourceFactory::fileFilters(), true));
+}
 
-    loadFiles(input_file_names);
+//! Options window of the recording kind being opened; Open loads the recording.
+void source_config_window()
+{
+    bool open = true;
+    ImGui::Begin(source_config_ui->title().c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize);
+    if (source_config_ui->draw())
+    {
+        const auto source = source_config_ui->open(source_open_error);
+        if (source)
+        {
+            loadFiles(source_config_files, source);
+            open = false;
+        }
+    }
+    if (!source_open_error.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", source_open_error.c_str());
+    ImGui::End();
+    if (!open)
+        source_config_ui.reset();
 }
 
 void imu_data_gui()
@@ -2077,7 +2133,7 @@ void display()
 
     const auto dropped = takeDroppedFiles();
     if (!dropped.empty())
-        openDropped(dropped);
+        openRecording(dropped);
 
     if (all_data.size() > 0)
     {
@@ -2121,7 +2177,7 @@ void display()
                 if (ImGui::MenuItem("Open files"))
                     openFiles();
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Select files for analyze");
+                    ImGui::SetTooltip("Select the files of a recording (Mandeye LAZ/CSV, ROS1 bag, MCAP, ...), or drop them on the window");
                 ImGui::MenuItem("Skip first file", nullptr, &skip_first_file);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Drop the points of the first LAZ file on the next load, as step 1 does");
@@ -2296,6 +2352,9 @@ void display()
     if (is_settings_gui)
         settings_gui();
 
+    if (source_config_ui)
+        source_config_window();
+
     rlImGuiEnd();
 }
 
@@ -2341,19 +2400,8 @@ int main(int argc, char* argv[])
         initGL(&argc, argv, winTitle, display, mouse);
         ImPlot::CreateContext();
 
-        if (argc == 2)
-        {
-            std::vector<std::string> input_file_names;
-
-            if (fs::exists(argv[1]))
-            {
-                for (const auto& entry : fs::recursive_directory_iterator(argv[1]))
-                    if (entry.is_regular_file())
-                        input_file_names.push_back(entry.path().string());
-
-                loadFiles(input_file_names);
-            }
-        }
+        if (argc == 2 && fs::exists(argv[1]))
+            openRecording({ argv[1] });
 
         mainLoop();
 

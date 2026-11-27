@@ -16,12 +16,15 @@ function(target_apply_hdmapping_profiler TARGET)
     endif()
 endfunction()
 
+include(${REPOSITORY_DIRECTORY}/recording_sources/recording_sources.cmake)
+
 # Source files
 set(SOURCES
   lidar_odometry_utils.h lidar_odometry_utils.cpp
   lidar_odometry_utils_optimizers.cpp
   lidar_odometry.cpp lidar_odometry.h
   points_global_spill.h points_global_spill.cpp
+  ${RECORDING_SOURCE_CORE_FILES}
   raw_cloud_loader.h raw_cloud_loader.cpp
   toml_io.h toml_io.cpp
 )
@@ -31,8 +34,9 @@ if(WIN32)
     list(APPEND SOURCES "resource.rc")
 endif()
 
+
 add_executable(
-  lidar_odometry_step_1 lidar_odometry_gui.cpp ${SOURCES}
+  lidar_odometry_step_1 lidar_odometry_gui.cpp ${SOURCES} ${RECORDING_SOURCE_FILES}
   )
 
 target_compile_definitions(lidar_odometry_step_1 PRIVATE WITH_GUI=1)
@@ -44,6 +48,8 @@ target_apply_hdmapping_profiler(lidar_odometry_step_1)
 target_include_directories(
   lidar_odometry_step_1
   PRIVATE include
+          ${CMAKE_CURRENT_SOURCE_DIR}
+          ${REPOSITORY_DIRECTORY}/recording_sources
           ${REPOSITORY_DIRECTORY}/core/include
           ${REPOSITORY_DIRECTORY}/core_hd_mapping/include
           ${THIRDPARTY_DIRECTORY}
@@ -55,11 +61,14 @@ target_include_directories(
           ${LASZIP_INCLUDE_DIR}/LASzip/include
           ${THIRDPARTY_DIRECTORY}/observation_equations/codes
           ${THIRDPARTY_DIRECTORY}/vqf/vqf/cpp
-          ${THIRDPARTY_DIRECTORY}/Fusion/Fusion)
+          ${THIRDPARTY_DIRECTORY}/Fusion/Fusion
+          ${REPOSITORY_DIRECTORY}/rosbags)
 
 target_link_libraries(
           lidar_odometry_step_1
           PRIVATE
+          mcap
+          ros1bag_compression
           step1_run_report
           # core_raylib_utils brings in core_raylib (core, raylib), raylib_widgets and rlImGui.
           core_raylib_utils
@@ -99,6 +108,8 @@ target_apply_hdmapping_profiler(drag_folder_with_mandeye_data_and_drop_here-prec
 target_include_directories(
   drag_folder_with_mandeye_data_and_drop_here-precision_forestry
   PRIVATE include
+          ${CMAKE_CURRENT_SOURCE_DIR}
+          ${REPOSITORY_DIRECTORY}/recording_sources
           ${REPOSITORY_DIRECTORY}/core/include
           ${REPOSITORY_DIRECTORY}/core_hd_mapping/include
           ${THIRDPARTY_DIRECTORY}

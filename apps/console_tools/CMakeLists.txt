@@ -85,7 +85,7 @@ target_link_libraries(
 # mcap_to_laz: the inverse of laz_to_mcap -- MCAP/ROS2 bag -> mandeye session
 # directory. Needs neither lidar_odometry_utils.cpp nor core: reading is
 # rosbags/McapReader and writing is rosbags/MandeyeSessionWriter, so laszip +
-# mcap + spdlog is the whole dependency set.
+# mcap + spdlog (+ header-only Eigen) is the whole dependency set.
 #
 # McapWriter.cpp is compiled in even though nothing here writes bags: it holds
 # the single MCAP_IMPLEMENTATION definition, which McapReader.cpp deliberately
@@ -101,6 +101,7 @@ add_executable(
 target_include_directories(
         mcap_to_laz
         PRIVATE ${REPOSITORY_DIRECTORY}/rosbags
+        ${EIGEN3_INCLUDE_DIR}
         ${LASZIP_INCLUDE_DIR}/LASzip/include)
 
 target_link_libraries(
@@ -118,8 +119,7 @@ endif()
 # bag_to_laz / laz_to_bag: the ROS1 bag twins of mcap_to_laz / laz_to_mcap,
 # built from the same sources with a define that swaps the reader (writer) for
 # rosbags/Ros1Bag -- no ROS installation needed. Reading compressed chunks needs
-# ros1bag_compression and mcap (see cmake/dependencies.cmake); on Windows only
-# uncompressed bags are read.
+# ros1bag_compression and mcap (see cmake/dependencies.cmake).
 add_executable(
         bag_to_laz mcap_to_laz.cpp
         ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.h ${REPOSITORY_DIRECTORY}/rosbags/Ros1Bag.cpp
@@ -130,6 +130,7 @@ target_compile_definitions(bag_to_laz PRIVATE HDMAPPING_IMPORT_ROS1_BAG)
 target_include_directories(
         bag_to_laz
         PRIVATE ${REPOSITORY_DIRECTORY}/rosbags
+        ${EIGEN3_INCLUDE_DIR}
         ${LASZIP_INCLUDE_DIR}/LASzip/include)
 target_link_libraries(
         bag_to_laz
