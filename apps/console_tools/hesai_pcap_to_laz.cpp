@@ -1,62 +1,31 @@
 // hesai_pcap_to_laz: Hesai pcap captures (.pcap, or zstd-compressed .pcap.zst as lidar_recorder writes them) ->
 // mandeye session directory, as mcap_to_laz and ouster_pcap_to_laz write one.
 //
-// UDP payloads are pushed straight into the Hesai LiDAR SDK's decoder with the lidar's angle correction; points and IMU
-// samples come out on the lidar clock and are converted as mandeye_controller's Hesai client does (acceleration in g,
-// angular velocity deg/s -> rad/s). A lidar_recorder session directory stands for its lidarNNNN.pcap.zst chunks, and
-// its gnssNNNN.nmea files (lidar-clock times, already in the mandeye format) are copied next to the result.
+// The packets are decoded by HesaiDecoder (the Hesai LiDAR SDK's parser) with the lidar's angle correction, as
+// lidar_odometry_step_1 reads a capture directly; points and IMU samples are on the lidar clock. A lidar_recorder session directory stands
+// for its lidarNNNN.pcap.zst chunks, and its gnssNNNN.nmea files (lidar-clock times, already in the mandeye format) are copied next to the
+// result.
 
 // See rosbags/McapWriter.h: the rosbags headers come before any standard header.
 #include "MandeyeSessionChunker.h"
 #include "MandeyeSessionWriter.h"
-#include "PcapUdpReader.h"
-
-#include "hesai_lidar_sdk.hpp"
+#include "hesai_decoder.h"
 
 #include "console_progress.h"
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
-#include <numbers>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
-using namespace hesai::lidar;
 
 namespace
 {
-    // lidarNNNN.pcap.zst (or .pcap when there is no .zst of the same chunk) of a lidar_recorder session, in order.
-    // Incomplete .part chunks are skipped.
-    std::vector<fs::path> sessionChunks(const fs::path& dir)
-    {
-        std::vector<fs::path> zst, plain;
-        for (const auto& e : fs::directory_iterator(dir))
-        {
-            const std::string n = e.path().filename().string();
-            if (n.rfind("lidar", 0) != 0)
-                continue;
-            if (n.ends_with(".pcap.zst"))
-                zst.push_back(e.path());
-            else if (n.ends_with(".pcap"))
-                plain.push_back(e.path());
-            else if (n.ends_with(".part"))
-                spdlog::warn("Skipping incomplete chunk {}", n);
-        }
-        for (const auto& p : plain)
-            if (std::find(zst.begin(), zst.end(), fs::path(p.string() + ".zst")) == zst.end())
-                zst.push_back(p);
-        std::sort(zst.begin(), zst.end());
-        return zst;
-    }
-
     void print_usage(const char* argv0)
     {
         spdlog::error("Usage: {} <input.pcap[.zst]> [<input.pcap[.zst]> ...] <output_session_dir> [options]", argv0);
@@ -145,7 +114,7 @@ int main(const int argc, const char** argv)
     {
         if (fs::is_directory(input))
         {
-            const auto chunks = sessionChunks(input);
+            const auto chunks = hesai_recorder_chunks(input);
             if (chunks.empty())
             {
                 spdlog::error("No lidarNNNN.pcap.zst or .pcap in {}", input);
@@ -180,120 +149,57 @@ int main(const int argc, const char** argv)
     rosbags::MandeyeSessionChunker chunker(writer, chunk_seconds);
     spdlog::info("Reading {} input(s) with angle correction {}", inputs.size(), correction.string());
 
-    // Both SDK callbacks run on the SDK's single processing thread, so the chunker needs no locking.
-    std::atomic<bool> write_ok{ true };
+    bool write_ok = true;
     uint64_t frames = 0;
-    std::vector<rosbags::McapPoint> points;
-    HesaiLidarSdk<LidarPointXYZICRT> sdk;
-    sdk.RegRecvCallback(
-        std::function<void(const LidarDecodedFrame<LidarPointXYZICRT>&)>(
-            [&](const LidarDecodedFrame<LidarPointXYZICRT>& frame)
-            {
-                points.clear();
-                points.reserve(frame.points_num);
-                for (uint32_t i = 0; i < frame.points_num; ++i)
-                {
-                    const auto& p = frame.points[i];
-                    if (p.x == 0.f && p.y == 0.f && p.z == 0.f)
-                        continue; // a "no return" slot, which the SDK still emits at the origin
-                    rosbags::McapPoint out;
-                    out.x = p.x;
-                    out.y = p.y;
-                    out.z = p.z;
-                    out.intensity = static_cast<float>(p.intensity);
-                    out.ring = p.ring;
-                    out.timestamp = p.timestamp;
-                    points.push_back(out);
-                }
-                if (!points.empty() && write_ok && !chunker.addPoints(points))
-                    write_ok = false;
-                ++frames;
-            }));
-    sdk.RegRecvCallback(
-        std::function<void(const LidarImuData&)>(
-            [&](const LidarImuData& d)
-            {
-                // SDK units: acceleration in g, angular velocity in deg/s; mandeye stores g and rad/s.
-                constexpr double kDegToRad = std::numbers::pi / 180.0;
-                rosbags::McapImuSample s;
-                s.timestamp = d.timestamp;
-                s.acc_x = static_cast<float>(d.imu_accel_x);
-                s.acc_y = static_cast<float>(d.imu_accel_y);
-                s.acc_z = static_cast<float>(d.imu_accel_z);
-                s.gyro_x = static_cast<float>(d.imu_ang_vel_x * kDegToRad);
-                s.gyro_y = static_cast<float>(d.imu_ang_vel_y * kDegToRad);
-                s.gyro_z = static_cast<float>(d.imu_ang_vel_z * kDegToRad);
-                chunker.addImu(s);
-            }));
-
-    DriverParam param;
-    param.input_param.source_type = DATA_FROM_ROS_PACKET; // packets are pushed in below
-    param.input_param.correction_file_path = correction.string();
-    param.decoder_param.pcap_play_in_loop = false;
-    sdk.Init(param); // returns at once; its init thread takes the first packet to detect the model
-
-    // Reader: pushes the point cloud UDP payloads into the SDK's packet ring, waiting while it is full.
-    std::atomic<bool> read_ok{ true };
-    uint64_t pushed = 0;
-    std::thread reader(
-        [&]
-        {
-            uint64_t input_bytes = 0;
-            for (const auto& path : inputs)
-            {
-                std::error_code ec;
-                input_bytes += fs::file_size(path, ec);
-            }
-            ConsoleProgress progress("Reading pcap (bytes)", input_bytes);
-            uint64_t bytes_before = 0;
-            for (const auto& path : inputs)
-            {
-                rosbags::PcapUdpReader pcap(path);
-                if (!pcap.isOpen())
-                {
-                    spdlog::error("Cannot read {}: {}", path.string(), pcap.error());
-                    read_ok = false;
-                    continue;
-                }
-                const bool ok = pcap.read(
-                    [&](const rosbags::UdpDatagram& d)
-                    {
-                        progress.update(bytes_before + pcap.stats().compressed_bytes_read);
-                        if (d.dst_port != udp_port)
-                            return;
-                        while (sdk.OriginPacketIsBufferFull())
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        sdk.PushOriginPacketBuffer(d.payload, static_cast<int>(d.size), static_cast<uint64_t>(d.capture_time_ns / 1000));
-                        ++pushed;
-                    });
-                if (!ok)
-                {
-                    spdlog::warn("{}: {} - kept what was read", path.string(), pcap.error());
-                    read_ok = false;
-                }
-                if (pcap.stats().dropped_fragments > 0)
-                    spdlog::warn(
-                        "{}: {} IP fragment(s) dropped: their datagram never completed (packet loss during capture)",
-                        path.string(),
-                        pcap.stats().dropped_fragments);
-                bytes_before += pcap.stats().compressed_bytes_read;
-            }
-            progress.finish(bytes_before);
-        });
-
-    sdk.Start(); // blocks until the decoder is initialised
-    reader.join();
-    if (sdk.lidar_ptr_->GetInitFinish(FailInit))
+    HesaiDecoder decoder(correction);
+    decoder.onFrame = [&](std::vector<rosbags::McapPoint>&& points)
     {
-        spdlog::error("The Hesai SDK failed to initialise (no point packets on UDP port {}?)", udp_port);
-        sdk.Stop();
+        if (write_ok && !chunker.addPoints(points))
+            write_ok = false;
+        ++frames;
+    };
+    decoder.onImu = [&](const rosbags::McapImuSample& sample)
+    {
+        chunker.addImu(sample);
+    };
+
+    uint64_t input_bytes = 0;
+    for (const auto& path : inputs)
+    {
+        std::error_code ec;
+        input_bytes += fs::file_size(path, ec);
+    }
+    ConsoleProgress progress("Reading pcap (bytes)", input_bytes);
+    uint64_t bytes_before = 0;
+    bool read_ok = true;
+    for (const auto& path : inputs)
+    {
+        // One decoder for all inputs: they are one continuous recording, so a frame spanning two files stays whole.
+        std::string error;
+        uint64_t bytes = 0;
+        if (!decode_hesai_capture(
+                path,
+                static_cast<uint16_t>(udp_port),
+                decoder,
+                error,
+                [&](uint64_t read)
+                {
+                    bytes = read;
+                    progress.update(bytes_before + read);
+                }))
+        {
+            spdlog::warn("{}: {} - kept what was read", path.string(), error);
+            read_ok = false;
+        }
+        bytes_before += bytes;
+    }
+    decoder.finish();
+    progress.finish(bytes_before);
+    if (!decoder.error().empty())
+    {
+        spdlog::error("{}", decoder.error());
         return EXIT_FAILURE;
     }
-    // Let the decoder drain the ring, then give the parser a moment for the last frame.
-    while (!sdk.lidar_ptr_->origin_packets_buffer_.empty())
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    sdk.Stop();
 
     if (!write_ok)
     {
@@ -302,7 +208,7 @@ int main(const int argc, const char** argv)
     }
     if (chunker.chunks() == 0)
     {
-        spdlog::error("No points decoded from {} packet(s) on UDP port {} - nothing to write", pushed, udp_port);
+        spdlog::error("No points decoded on UDP port {} - nothing to write", udp_port);
         return EXIT_FAILURE;
     }
     if (!chunker.finish())
