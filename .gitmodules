@@ -77,3 +77,7 @@
 	path = 3rdparty/bzip2
 	url = https://gitlab.com/bzip2/bzip2.git
 	shallow = true
+[submodule "3rdparty/HesaiLidar_SDK_2.0"]
+	path = 3rdparty/HesaiLidar_SDK_2.0
+	url = https://github.com/HesaiTechnology/HesaiLidar_SDK_2.0.git
+	shallow = true

@@ -7,6 +7,22 @@
 #include <unordered_map>
 #include <vector>
 
+/**
+ * @brief Loads the IMU of a Mandeye recording: the imu****.csv files, or, when they hold no samples (units with an
+ * external IMU such as a Murata log into a subfolder instead), the csv files of the folder's MURATA_IMU.
+ * @param csv_files The recording's imu****.csv files.
+ * @param folder The recording folder, which holds MURATA_IMU.
+ * @param imu_number The imuId to read from files that carry one.
+ * @param imu_data Receives every sample, unsorted.
+ * @param imuSpans Receives one span per file read.
+ */
+void load_mandeye_imu(
+    const std::vector<std::string>& csv_files,
+    const std::filesystem::path& folder,
+    int imu_number,
+    Imu& imu_data,
+    std::vector<InputFileSpan>& imuSpans);
+
 //! A Mandeye recording folder: lidarNNNN.laz chunks paired with imuNNNN.csv files by their last four stem characters,
 //! plus the optional calibration (.mjc or calibration .json), .sn file and MURATA_IMU folder.
 class LazCsvSource : public RecordingSource
