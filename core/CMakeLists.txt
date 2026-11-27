@@ -8,6 +8,7 @@ set(CORE_BASE_SOURCES
     src/gnss.cpp
     src/ground_control_points.cpp
     src/imu_preintegration.cpp
+    src/instrument_offset.cpp
     src/nmea.cpp
     src/point_cloud.cpp
     src/point_clouds.cpp
