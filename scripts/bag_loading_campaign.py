@@ -28,6 +28,7 @@ import sys
 import tarfile
 import time
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class Recording:
     size_mb: int
     license: str
     note: str
-    archive: bool = False  # a .tar.gz holding several bags; the smallest one is used
+    archive: str = ""  # "tar.gz" or "zip" holding several recordings; the smallest .bag or .mcap is used
     large: bool = False  # downloaded only with --large
     imu_topic: str = ""  # empty: the IMU topic with the most messages
 
@@ -60,7 +61,39 @@ RECORDINGS = [
         size_mb=1945,
         license="CC-BY-4.0",
         note="Koide LiDAR-camera calibration dataset (Zenodo 7780490), ROS1 bag: Livox Avia PointCloud2 and CustomMsg + IMU",
-        archive=True,
+        archive="tar.gz",
+    ),
+    Recording(
+        name="koide_os0_32",
+        url="https://zenodo.org/api/records/6864654/files/os0-32.bag/content",
+        size_mb=747,
+        license="CC-BY-4.0",
+        note="LiDAR-IMU mapping test (Zenodo 6864654), ROS1 bag: Ouster OS0-32 PointCloud2 + IMU",
+    ),
+    Recording(
+        name="koide_mid360",
+        url="https://zenodo.org/api/records/21486938/files/mid360_01.tar.gz/content",
+        size_mb=160,
+        license="CC-BY-4.0",
+        note="LiDAR-IMU mapping test (Zenodo 21486938): Livox Mid-360 + IMU",
+        archive="tar.gz",
+    ),
+    Recording(
+        name="koide_os0_64",
+        url="https://zenodo.org/api/records/6864654/files/os0-64.bag/content",
+        size_mb=1745,
+        license="CC-BY-4.0",
+        note="LiDAR-IMU mapping test (Zenodo 6864654), ROS1 bag: Ouster OS0-64 PointCloud2 + IMU",
+        large=True,
+    ),
+    Recording(
+        name="aeroarms_velodyne",
+        url="https://zenodo.org/api/records/2648635/files/USE_AEROARMS_Multisensor_Dataset.zip/content",
+        size_mb=2936,
+        license="CC-BY-4.0",
+        note="AEROARMS multi-sensor dataset (Zenodo 2648635), ROS1 bag from a drone: Velodyne PointCloud2 + IMU",
+        archive="zip",
+        large=True,
     ),
     Recording(
         name="hilti2022_exp14",
@@ -113,32 +146,49 @@ def download(url: str, target: Path) -> None:
     log(f"{target.name}: downloaded {done >> 20} MB")
 
 
+def download_name(recording: Recording) -> str:
+    """File name of the download: Zenodo URLs end in .../files/<name>/content."""
+    parts = Path(recording.url).parts
+    return parts[-2] if parts[-1] == "content" else parts[-1]
+
+
+def recordings_in(folder: Path) -> list[Path]:
+    """The .bag and .mcap files below folder, smallest first."""
+    if not folder.exists():
+        return []
+    files = [p for p in folder.rglob("*") if p.suffix in (".bag", ".mcap") and p.is_file() and not p.stem.endswith("_recovered")]
+    return sorted(files, key=lambda p: p.stat().st_size)
+
+
 def source_file(recording: Recording, data: Path) -> Path:
     """The downloaded recording, extracted from its archive when it is one."""
     downloads = data / "downloads" / recording.name
     if not recording.archive:
-        return downloads / Path(recording.url).name
-    extracted = downloads / "extracted"
-    bags = sorted(extracted.rglob("*.bag"), key=lambda p: p.stat().st_size) if extracted.exists() else []
-    if not bags:
-        raise RuntimeError(f"{recording.name}: no .bag in {extracted}; run the download step")
-    return bags[0]
+        return downloads / download_name(recording)
+    extracted = recordings_in(downloads / "extracted")
+    if not extracted:
+        raise RuntimeError(f"{recording.name}: no .bag or .mcap in {downloads / 'extracted'}; run the download step")
+    return extracted[0]
 
 
 def download_recording(recording: Recording, data: Path) -> None:
     downloads = data / "downloads" / recording.name
     if not recording.archive:
-        download(recording.url, downloads / Path(recording.url).name)
+        download(recording.url, downloads / download_name(recording))
         return
-    archive = downloads / f"{recording.name}.tar.gz"
+    archive = downloads / f"{recording.name}.{recording.archive}"
     extracted = downloads / "extracted"
-    if extracted.exists() and any(extracted.rglob("*.bag")):
+    if recordings_in(extracted):
         log(f"{recording.name}: already extracted")
         return
     download(recording.url, archive)
     log(f"{recording.name}: extracting {archive.name}")
-    with tarfile.open(archive) as tar:
-        tar.extractall(extracted, filter="data")
+    if recording.archive == "zip":
+        with zipfile.ZipFile(archive) as zip_file:
+            zip_file.extractall(extracted)
+    else:
+        with tarfile.open(archive) as tar:
+            tar.extractall(extracted, filter="data")
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -214,8 +264,58 @@ def rewrite_mcap(source: Path, target: Path, compression: str, start_ns: int = 0
         writer.finish()
 
 
-def prepare_recording(recording: Recording, data: Path) -> None:
+def recover_mcap(source: Path, target: Path) -> int:
+    """Copies the messages of a truncated MCAP file (no footer, so no index) into an indexed one, as `mcap recover` does:
+    the records are read in file order up to the cut. Returns the number of messages recovered."""
+    from mcap.records import Channel, Message, Schema
+    from mcap.stream_reader import StreamReader
+    from mcap.writer import CompressionType, Writer
+
+    partial = target.with_name(target.name + ".part")
+    count = 0
+    with open(source, "rb") as src, open(partial, "wb") as out:
+        writer = Writer(out, compression=CompressionType.NONE)
+        writer.start(profile="ros2", library="hdmapping-bag-campaign recover")
+        schemas: dict[int, int] = {}
+        channels: dict[int, int] = {}
+        try:
+            for record in StreamReader(src).records:
+                if isinstance(record, Schema):
+                    schemas[record.id] = writer.register_schema(record.name, record.encoding, record.data)
+                elif isinstance(record, Channel):
+                    channels[record.id] = writer.register_channel(
+                        record.topic, record.message_encoding, schemas.get(record.schema_id, 0), record.metadata
+                    )
+                elif isinstance(record, Message) and record.channel_id in channels:
+                    writer.add_message(channels[record.channel_id], record.log_time, record.data, record.publish_time, record.sequence)
+                    count += 1
+        except Exception as error:  # the cut: a record or chunk that ends early
+            log(f"{source.name}: stopped at the cut ({type(error).__name__}: {error})")
+        writer.finish()
+    partial.rename(target)
+    return count
+
+
+def readable_source(recording: Recording, data: Path) -> Path:
+    """The recording's file, or a recovered copy of a truncated MCAP file."""
+    from rosbags.highlevel import AnyReader
+
     source = source_file(recording, data)
+    try:
+        with AnyReader([source]):
+            return source
+    except Exception as error:
+        if source.suffix != ".mcap":
+            raise
+        recovered = source.with_name(source.stem + "_recovered.mcap")
+        if not recovered.exists():
+            log(f"{recording.name}: {source.name} cannot be read ({error}); recovering it as `mcap recover` would")
+            log(f"{recording.name}: recovered {recover_mcap(source, recovered)} messages into {recovered.name}")
+        return recovered
+
+
+def prepare_recording(recording: Recording, data: Path) -> None:
+    source = readable_source(recording, data)
     topics = find_topics(source, recording.imu_topic)
     log(f"{recording.name}: IMU {topics.imu}, lidar {topics.lidars}")
     for label, lidar in topics.lidars.items():
